@@ -29,7 +29,7 @@ from telegram.ext import (
     Application, ApplicationBuilder, CallbackQueryHandler,
     CommandHandler, ContextTypes, MessageHandler, filters,
 )
-from languages import LANGUAGES, get_text
+from languages import LANGUAGES, get_text, get_role_text, get_achievement_text
 
 # ══════════════════════════════════════════════════════════════════
 # LOGGING
@@ -66,6 +66,19 @@ AI_NAMES = [
     "🤖 Alice", "🤖 Bob", "🤖 Carlos", "🤖 Diana",
     "🤖 Erik", "🤖 Fatima", "🤖 George", "🤖 Hana",
 ]
+
+# Kurtlar Vadisi karakter görselleri (web aramasında bulunan görsel kaynakları).
+# Görsel erişilemezse bot rol metnini fotoğrafsız göndermeye geri döner.
+ROLE_IMAGES = {
+    "fuqaro": "https://www.bursahakimiyet.com.tr/static/2026/01/15/kurtlar-vadisi-efsanesinin-20-yili-1768470442-564_large.webp",
+    "mafia": "https://cdn.karar.com/news/1389096.jpg",
+    "don": "https://www.detaykibris.com/d/gallery/3148_20.jpg",
+    "komissar": "https://i.pinimg.com/originals/4c/48/e7/4c48e771ea99126403624560449cc72d.jpg",
+    "shifokor": "https://i.pinimg.com/736x/b0/5e/71/b05e718d3d2d94f231671eb26e348799.jpg",
+    "guvoh": "https://i.pinimg.com/736x/2b/ce/24/2bce2410d1a0e038c1886937386d9a03.jpg",
+    "kamikaze": "https://i1.sndcdn.com/artworks-000069787979-c3vbuc-t1080x1080.jpg",
+    "suicid": "https://cdn.karar.com/news/1389096.jpg",
+}
 
 # ══════════════════════════════════════════════════════════════════
 # ENUMS & MODELS
@@ -134,8 +147,16 @@ class Role(Enum):
         }[self]
 
 
+ROLE_POWER = {
+    Role.DON: 100, Role.KOMISSAR: 90, Role.SHIFOKOR: 80,
+    Role.GUVOH: 70, Role.KAMIKAZE: 60, Role.MAFIA: 50,
+    Role.SUICID: 40, Role.FUQARO: 10,
+}
+
+
 class Phase(Enum):
     LOBBY   = auto()
+    STARTING = auto()
     NIGHT   = auto()
     DAY     = auto()
     VOTING  = auto()
@@ -234,7 +255,7 @@ def assign_roles(players: list[Player]) -> None:
 class RoleEngine:
 
     @staticmethod
-    def resolve_night(players: dict[int, Player]) -> NightResult:
+    def resolve_night(players: dict[int, Player], lang: str = "tr") -> NightResult:
         res = NightResult()
         alive = {uid: p for uid, p in players.items() if p.is_alive}
 
@@ -267,7 +288,7 @@ class RoleEngine:
         if mafia_votes:
             kill_target = max(mafia_votes, key=lambda k: mafia_votes[k])
             if kill_target in res.healed:
-                res.messages.append("🛡️ Aslan Akbey bir oyuncuyu ölümden kurtardı!")
+                res.messages.append(get_text(lang, "doctor_saved"))
             else:
                 players[kill_target].is_alive = False
                 res.killed.append(kill_target)
@@ -286,18 +307,17 @@ class RoleEngine:
             if target_p.role.is_mafia_team:
                 if target_p.night_target and target_p.night_target in players:
                     victim_name = players[target_p.night_target].name
-                    info = (f"🔴 {target_p.name} ({target_p.role.emoji}) "
-                            f"→ <b>{victim_name}</b>ni o'ldirmoqchi edi!")
+                    info = get_text(lang, "witness_mafia", name=target_p.name, victim=victim_name)
                 else:
-                    info = f"🔴 {target_p.name} Mafiya/Don — lekin nishon tanlamadi."
+                    info = get_text(lang, "witness_no_target", name=target_p.name)
             elif target_p.role == Role.KOMISSAR and target_p.night_target:
                 tname = players.get(target_p.night_target, Player(-1,"?")).name
-                info = f"👮 {target_p.name} → <b>{tname}</b>ni tekshirdi."
+                info = get_text(lang, "witness_check", name=target_p.name, target=tname)
             elif target_p.role == Role.SHIFOKOR and target_p.night_target:
                 tname = players.get(target_p.night_target, Player(-1,"?")).name
-                info = f"💉 {target_p.name} → <b>{tname}</b>ni davoladi."
+                info = get_text(lang, "witness_heal", name=target_p.name, target=tname)
             else:
-                info = f"👨‍🌾 {target_p.name} hech narsa qilmadi (oddiy fuqaro)."
+                info = get_text(lang, "witness_idle", name=target_p.name)
             res.witnessed[g_uid] = info
 
         return res
@@ -306,7 +326,20 @@ class RoleEngine:
     def check_win(players: dict[int, Player]) -> Optional[str]:
         alive = [p for p in players.values() if p.is_alive]
         if not alive:
-            return "draw"
+            if not players:
+                return "draw"
+            # Son hamlede herkes elenirse de rol gücü en yüksek oyuncu galip sayılır.
+            winner = max(players.values(), key=lambda p: (ROLE_POWER[p.role], p.user_id))
+            if winner.role == Role.SUICID:
+                return "suicid"
+            return "mafia" if winner.role.is_mafia_team else "town"
+
+        # Son iki oyuncuda sayı eşitliği oyunu kilitlemez: rol gücü yüksek olan kazanır.
+        if len(alive) in (1, 2):
+            winner = max(alive, key=lambda p: (ROLE_POWER[p.role], p.user_id))
+            if winner.role == Role.SUICID:
+                return "suicid"
+            return "mafia" if winner.role.is_mafia_team else "town"
 
         mafia_alive = [p for p in alive if p.role.is_mafia_team]
         town_alive  = [p for p in alive if not p.role.is_mafia_team]
@@ -320,6 +353,14 @@ class RoleEngine:
             return "mafia"
 
         return None
+
+    @staticmethod
+    def last_standing_winner_id(players: dict[int, Player]) -> Optional[int]:
+        alive = [p for p in players.values() if p.is_alive]
+        candidates = alive if len(alive) in (1, 2) else (list(players.values()) if not alive else [])
+        if not candidates:
+            return None
+        return max(candidates, key=lambda p: (ROLE_POWER[p.role], p.user_id)).user_id
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -552,11 +593,12 @@ SendFn = Callable[..., Awaitable[None]]
 
 
 class Game:
-    def __init__(self, chat_id: int, send_fn: SendFn, lang: str = "tr"):
+    def __init__(self, chat_id: int, send_fn: SendFn, lang: str = "tr", app: Optional[Application] = None):
         self.chat_id   = chat_id
         self.lang      = lang if lang in LANGUAGES else "tr"
         self.game_id   = str(uuid.uuid4())[:6].upper()
         self.send      = send_fn
+        self.app       = app
         self.phase     = Phase.LOBBY
         self.players:  dict[int, Player] = {}
         self.round     = 0
@@ -645,19 +687,19 @@ class Game:
             except Exception:
                 pass
         if self._extends >= MAX_EXTEND:
-            return f"❌ Maksimal uzaytirish ({MAX_EXTEND} marta) ishlatildi."
+            return get_text(self.lang, "extend_limit", maximum=MAX_EXTEND)
         if self.phase != Phase.LOBBY:
-            return "❌ Lobby fazasi emas."
+            return get_text(self.lang, "lobby_not_active")
         self._extends += 1
         self._lobby_remaining += EXTEND_SECS
-        return f"✅ +{EXTEND_SECS} soniya qo'shildi! ({self._extends}/{MAX_EXTEND})"
+        return get_text(self.lang, "lobby_extended", seconds=EXTEND_SECS, count=self._extends, maximum=MAX_EXTEND)
 
     # ── Start game ────────────────────────────────────────────────
     async def start_game(self) -> str:
         if self.phase != Phase.LOBBY:
-            return "❌ Lobby fazasi emas."
+            return get_text(self.lang, "lobby_not_active")
         if self.n() < MIN_PLAYERS:
-            return f"❌ Kamida {MIN_PLAYERS} o'yinchi kerak! (hozir {self.n()})"
+            return get_text(self.lang, "not_enough_players", minimum=MIN_PLAYERS, count=self.n())
         await self._do_start()
         return "ok"
 
@@ -666,7 +708,7 @@ class Game:
             return
         self._cancel()
         assign_roles(list(self.players.values()))
-        self.phase = Phase.NIGHT
+        self.phase = Phase.STARTING
 
         await db.save_game(self.game_id, self.chat_id, self.n())
 
@@ -675,7 +717,57 @@ class Game:
             self.chat_id,
             get_text(self.lang, "game_started", game_id=self.game_id, count=self.n())
         )
+        # Rollar avtomatik start, qo'lda start va callback orqali start holatlarining
+        # barchasida shaxsiy chatga yuboriladi.
+        missing_dm = []
+        delivered_dm = []
+        if self.app is not None:
+            for player in self.players.values():
+                if player.is_ai or player.user_id < 0:
+                    continue
+                player_lang = await db.get_language(player.user_id)
+                role_text = self.role_info(player.user_id, player_lang)
+                photo = ROLE_IMAGES.get(player.role.value)
+                try:
+                    delivered = False
+                    if photo:
+                        try:
+                            await self.app.bot.send_photo(
+                                chat_id=player.user_id, photo=photo, caption=role_text,
+                                parse_mode=ParseMode.HTML
+                            )
+                            delivered = True
+                        except TelegramError as photo_error:
+                            log.warning("Rol görseli gönderilemedi, metin deneniyor: %s", photo_error)
+                    if not delivered:
+                        await self.app.bot.send_message(
+                            chat_id=player.user_id, text=role_text,
+                            parse_mode=ParseMode.HTML
+                        )
+                    delivered_dm.append(player.user_id)
+                except Forbidden:
+                    missing_dm.append(player.name)
+                except TelegramError as exc:
+                    log.warning("Rol DM yuborilmadi (%s): %s", player.user_id, exc)
+                    missing_dm.append(player.name)
         await self._begin_night()
+        # Night state is fully initialized before action buttons are sent, avoiding a race
+        # where a fast player action could be reset by the night initializer.
+        if self.app is not None:
+            for player_uid in delivered_dm:
+                player = self.players.get(player_uid)
+                if player and player.role.has_night_action and player.is_alive:
+                    await send_night_dm(self.app, self, player_uid)
+            if missing_dm:
+                try:
+                    me = await self.app.bot.get_me()
+                    start_link = f"https://t.me/{me.username}?start=play"
+                    await self.send(
+                        self.chat_id,
+                        get_text(self.lang, "dm_missing", names=', '.join(missing_dm), link=start_link)
+                    )
+                except TelegramError:
+                    log.exception("DM yetkazish ogohlantirishi yuborilmadi")
 
     # ── Night ─────────────────────────────────────────────────────
     async def _begin_night(self) -> None:
@@ -710,25 +802,40 @@ class Game:
         await asyncio.sleep(NIGHT_TIMEOUT)
         await self._resolve_night()
 
-    async def record_action(self, uid: int, target_id: int) -> str:
+    async def record_action(self, uid: int, target_id: int, lang: Optional[str] = None) -> str:
+        display_lang = lang if lang in LANGUAGES else self.lang
         if self.phase != Phase.NIGHT:
-            return "❌ Kecha fazasi emas."
+            return get_text(display_lang, "phase_night")
         p = self.players.get(uid)
         if not p or not p.is_alive:
-            return "❌ Siz o'yinda yoki tirik emassiz."
+            return get_text(display_lang, "not_alive")
         if not p.role.has_night_action:
-            return "❌ Sizning rolingizda kecha harakati yo'q."
+            return get_text(display_lang, "no_night_action")
         t = self.players.get(target_id)
         if not t or not t.is_alive:
-            return "❌ Noto'g'ri nishon."
+            return get_text(display_lang, "invalid_target")
         if target_id == uid and p.role != Role.SHIFOKOR:
-            return "❌ O'zingizni nishon qila olmaysiz."
+            return get_text(display_lang, "self_target")
         p.night_target = target_id
         p.has_acted = True
         if self._all_acted():
             self._cancel()
             asyncio.create_task(self._resolve_night())
-        return f"✅ <b>{t.name}</b> ga harakat qayd etildi."
+        return get_text(display_lang, "action_recorded", name=t.name)
+
+    async def skip_action(self, uid: int, lang: Optional[str] = None) -> str:
+        display_lang = lang if lang in LANGUAGES else self.lang
+        if self.phase != Phase.NIGHT:
+            return get_text(display_lang, "phase_night")
+        player = self.players.get(uid)
+        if not player or not player.is_alive or not player.role.has_night_action:
+            return get_text(display_lang, "no_night_action")
+        player.night_target = None
+        player.has_acted = True
+        if self._all_acted():
+            self._cancel()
+            asyncio.create_task(self._resolve_night())
+        return get_text(display_lang, "night_skip_done")
 
     def _all_acted(self) -> bool:
         for p in self.players.values():
@@ -740,7 +847,7 @@ class Game:
         if self.phase != Phase.NIGHT:
             return
 
-        res = RoleEngine.resolve_night(self.players)
+        res = RoleEngine.resolve_night(self.players, self.lang)
         lines = [get_text(self.lang, "dawn") + "\n"]
 
         if not res.killed:
@@ -748,9 +855,10 @@ class Game:
         else:
             for uid in res.killed:
                 p = self.players[uid]
+                role_name, _ = get_role_text(self.lang, p.role.value)
                 lines.append(
                     get_text(self.lang, "player_killed", name=p.name,
-                             emoji=p.role.emoji, role=p.role.uz_name)
+                             emoji=p.role.emoji, role=role_name)
                 )
 
         lines.extend(res.messages)
@@ -761,20 +869,19 @@ class Game:
             if p.role == Role.KOMISSAR and p.is_alive and p.night_target in res.checked:
                 is_m = res.checked[p.night_target]
                 t_name = self.players[p.night_target].name
-                result_text = "🔴 MAFIYA!" if is_m else "🟢 Tinch fuqaro."
-                await self.send(
-                    k_uid,
-                    f"👮 Tekshiruv natijasi:\n"
-                    f"<b>{t_name}</b> → {result_text}"
-                )
+                player_lang = await db.get_language(k_uid)
+                result_text = get_text(player_lang, "mafia_result" if is_m else "town_result")
+                await self.send(k_uid, get_text(player_lang, "check_result", name=t_name, result=result_text))
 
         # Private: guvoh results
         for g_uid, info in res.witnessed.items():
-            await self.send(g_uid, f"👁 <b>Kuzatuv natijasi:</b>\n{info}")
+            player_lang = await db.get_language(g_uid)
+            await self.send(g_uid, get_text(player_lang, "witness_result", info=info))
 
         winner = RoleEngine.check_win(self.players)
         if winner:
-            await self._end_game(winner)
+            winner_id = RoleEngine.last_standing_winner_id(self.players)
+            await self._end_game(winner, winner_id=winner_id)
         else:
             await self._begin_day()
 
@@ -800,12 +907,12 @@ class Game:
 
     async def skip_day(self, uid: int, is_admin: bool = False) -> str:
         if uid != self.host_id and not is_admin:
-            return "❌ Faqat o'yin egasi yoki guruh administratori o'tkazib yuborishi mumkin."
+            return get_text(self.lang, "skip_day_denied")
         if self.phase != Phase.DAY:
-            return "❌ Kun fazasi emas."
+            return get_text(self.lang, "not_day")
         self._cancel()
         asyncio.create_task(self._begin_voting())
-        return "⏩ Ovoz berishga o'tilmoqda!"
+        return get_text(self.lang, "go_vote")
 
     # ── Voting ────────────────────────────────────────────────────
     async def _begin_voting(self) -> None:
@@ -822,7 +929,7 @@ class Game:
             [InlineKeyboardButton(f"🗳 {name}", callback_data=f"vote:{uid}")]
             for uid, name in targets_clean
         ]
-        buttons.append([InlineKeyboardButton("⏭ Betaraf", callback_data="vote:skip")])
+        buttons.append([InlineKeyboardButton(get_text(self.lang, "vote_skip"), callback_data="vote:skip")])
 
         await self.send(
             self.chat_id,
@@ -841,22 +948,23 @@ class Game:
         self._cancel()
         self._task = asyncio.create_task(self._vote_timeout())
 
-    def cast_vote(self, voter: int, target: int) -> str:
+    def cast_vote(self, voter: int, target: int, lang: Optional[str] = None) -> str:
+        display_lang = lang if lang in LANGUAGES else self.lang
         if self.phase != Phase.VOTING:
-            return "❌ Ovoz berish vaqti emas."
+            return get_text(display_lang, "not_voting")
         vp = self.players.get(voter)
         tp = self.players.get(target)
         if not vp or not vp.is_alive:
-            return "❌ Siz ovoz bera olmaysiz."
+            return get_text(display_lang, "cannot_vote")
         if not tp or not tp.is_alive:
-            return "❌ Noto'g'ri nishon."
+            return get_text(display_lang, "invalid_target")
         if voter == target:
-            return "❌ O'zingizga ovoz bera olmaysiz."
+            return get_text(display_lang, "self_vote")
         prev = self.votes.prev(voter)
         self.votes.cast(voter, target)
         if prev and prev != target and prev in self.players:
-            return f"🔄 Ovoz o'zgartirildi → <b>{tp.name}</b>"
-        return f"✅ <b>{tp.name}</b> ga ovoz berildi"
+            return get_text(display_lang, "vote_changed", name=tp.name)
+        return get_text(display_lang, "vote_cast", name=tp.name)
 
     async def _vote_timeout(self) -> None:
         await asyncio.sleep(VOTE_TIMEOUT)
@@ -874,7 +982,7 @@ class Game:
 
         # Show results
         tally_lines = [
-            f"  {self.players[uid].name}: {v} ovoz"
+            get_text(self.lang, "vote_line", name=self.players[uid].name, count=v)
             for uid, v in sorted(tally.items(), key=lambda x: -x[1])
             if uid in self.players
         ]
@@ -885,8 +993,8 @@ class Game:
             names = ", ".join(self.players[uid].name for uid in leaders)
             await self.send(
                 self.chat_id,
-                f"📊 <b>Ovozlar:</b>\n" + "\n".join(tally_lines) +
-                f"\n\n⚖️ Tenglik: <b>{names}</b>! Hech kim chiqarilmadi."
+                get_text(self.lang, "vote_results") + "\n" + "\n".join(tally_lines) +
+                "\n\n" + get_text(self.lang, "vote_tie", names=names)
             )
             await self._maybe_continue()
             return
@@ -899,9 +1007,8 @@ class Game:
             p.is_alive = False
             await self.send(
                 self.chat_id,
-                f"📊 <b>Ovozlar:</b>\n" + "\n".join(tally_lines) +
-                f"\n\n☠️ <b>{p.name}</b> osib o'ldirildi...\n"
-                f"U {p.role.emoji} <b>SUICID</b> edi — va U G'OLIB BO'LDI! 🎉"
+                get_text(self.lang, "vote_results") + "\n" + "\n".join(tally_lines) +
+                "\n\n" + get_text(self.lang, "traitor_eliminated", name=p.name)
             )
             await self._end_game("suicid", winner_id=condemned)
             return
@@ -941,18 +1048,13 @@ class Game:
             return
 
         p.is_alive = False
-        msg = (
-            f"🪓 <b>{p.name}</b> osib o'ldirildi!\n"
-            f"U {p.role.emoji} <b>{p.role.uz_name}</b> edi."
-        )
+        role_name, _ = get_role_text(self.lang, p.role.value)
+        msg = get_text(self.lang, "player_eliminated", name=p.name, role=role_name)
 
         if kamikaze_extra and self.players.get(kamikaze_extra):
             victim = self.players[kamikaze_extra]
             victim.is_alive = False
-            msg += (
-                f"\n\n💣 KAMIKAZE! <b>{p.name}</b> o'lishdan oldin "
-                f"<b>{victim.name}</b> ni ham o'ldirdi!"
-            )
+            msg += "\n\n" + get_text(self.lang, "kamikaze_hit", victim=victim.name)
 
         await self.send(self.chat_id, msg)
         await self._maybe_continue()
@@ -960,7 +1062,8 @@ class Game:
     async def _maybe_continue(self) -> None:
         winner = RoleEngine.check_win(self.players)
         if winner:
-            await self._end_game(winner)
+            winner_id = RoleEngine.last_standing_winner_id(self.players)
+            await self._end_game(winner, winner_id=winner_id)
         else:
             await self._begin_night()
 
@@ -970,25 +1073,32 @@ class Game:
         self._cancel()
 
         emoji = {"town": "🏙", "mafia": "🔫", "suicid": "☠️", "draw": "⚖️"}.get(winner, "🎭")
-        text  = {
-            "town":   "Halk ve istihbarat ekibi kazandı! 🏙",
-            "mafia":  "Konsey kazandı! 🔫",
-            "suicid": "Hain kendi oyununu kazandı! 🎭",
-            "draw":   "Durrang! ⚖️",
-        }.get(winner, winner)
+        reveal_rows = []
+        for p in self.players.values():
+            role_name, _ = get_role_text(self.lang, p.role.value)
+            state = get_text(self.lang, "alive" if p.is_alive else "dead")
+            reveal_rows.append(f"  {p.role.emoji} <b>{p.name}</b> — {role_name} [{state}]")
+        reveal = "\n".join(reveal_rows)
 
-        reveal = "\n".join(
-            f"  {p.role.emoji} <b>{p.name}</b> — {p.role.uz_name} "
-            f"[{'✅ Tirik' if p.is_alive else '💀 O\'ldi'}]"
-            for p in self.players.values()
+        end_caption = (
+            f"{emoji} <b>{get_text(self.lang, 'game_over')}</b>\n<b>{get_text(self.lang, 'winner_' + winner)}</b>\n\n"
+            f"<b>{get_text(self.lang, 'final_roles')}</b>\n{reveal}\n\n"
+            f"📊 {get_text(self.lang, 'rounds_played', rounds=self.round)}"
         )
-
-        await self.send(
-            self.chat_id,
-            f"{emoji} <b>O'YIN TUGADI!</b>\n<b>{text}</b>\n\n"
-            f"<b>Yakuniy rollar:</b>\n{reveal}\n\n"
-            f"📊 {self.round} tur o'ynaldi. /stats buyrug'i bilan statistika ko'ring!"
-        )
+        if self.app is not None:
+            image_role = next((p.role for p in self.players.values()
+                               if p.user_id == winner_id), None)
+            if image_role is None:
+                image_role = Role.DON if winner == 'mafia' else (Role.KOMISSAR if winner == 'town' else Role.SUICID)
+            try:
+                await self.app.bot.send_photo(
+                    chat_id=self.chat_id, photo=ROLE_IMAGES.get(image_role.value),
+                    caption=end_caption, parse_mode=ParseMode.HTML
+                )
+            except TelegramError:
+                await self.send(self.chat_id, end_caption)
+        else:
+            await self.send(self.chat_id, end_caption)
 
         # Persist
         await db.end_game(self.game_id, winner, self.round)
@@ -1016,9 +1126,9 @@ class Game:
             try:
                 await self.send(
                     p.user_id,
-                    f"📊 O'yin tugadi!\n"
-                    f"{'🏆 G\'ALABA' if won else '💀 Mag\'lubiyat'}\n"
-                    f"ELO: {sign}{elo_ch}"
+                    get_text(await db.get_language(p.user_id), "private_result",
+                             result=get_text(await db.get_language(p.user_id), "win_label" if won else "loss_label"),
+                             sign=sign, elo=elo_ch)
                 )
             except Exception:
                 pass
@@ -1036,18 +1146,18 @@ class Game:
             self._task.cancel()
         self._task = None
 
-    def role_info(self, uid: int) -> str:
+    def role_info(self, uid: int, lang: Optional[str] = None) -> str:
         p = self.players.get(uid)
         if not p:
-            return "Siz bu o'yinda emassiz."
-        lines = [f"{p.role.emoji} <b>Siz — {p.role.uz_name}!</b>\n", p.role.description]
+            return get_text(self.lang, "not_in_game")
+        display_lang = lang if lang in LANGUAGES else self.lang
+        role_name, role_description = get_role_text(display_lang, p.role.value)
+        lines = [f"{p.role.emoji} <b>{get_text(display_lang, 'your_role', role=role_name)}</b>\n", role_description]
         if p.role.is_mafia_team:
-            mates = [
-                q.name for qid, q in self.players.items()
-                if q.role.is_mafia_team and qid != uid
-            ]
+            mates = [q.name for qid, q in self.players.items()
+                     if q.role.is_mafia_team and qid != uid]
             if mates:
-                lines.append(f"\n🤝 Jamoadoshlar: <b>{', '.join(mates)}</b>")
+                lines.append(get_text(display_lang, "teammates", names=', '.join(mates)))
         return "\n".join(lines)
 
 
@@ -1061,8 +1171,8 @@ class Registry:
     def get(self, chat_id: int) -> Optional[Game]:
         return self._g.get(chat_id)
 
-    def new(self, chat_id: int, send_fn: SendFn, lang: str = "tr") -> Game:
-        g = Game(chat_id, send_fn, lang)
+    def new(self, chat_id: int, send_fn: SendFn, lang: str = "tr", app: Optional[Application] = None) -> Game:
+        g = Game(chat_id, send_fn, lang, app=app)
         self._g[chat_id] = g
         return g
 
@@ -1123,25 +1233,18 @@ async def send_night_dm(app: Application, game: Game, uid: int) -> None:
         if q.user_id != uid
     ]
 
-    verbs = {
-        Role.MAFIA:    "🔫 Konsey hedefi kim olsun?",
-        Role.DON:      "👑 Baron emri: Hedef kim olsun?",
-        Role.KOMISSAR: "🕶️ Kimi soruşturacaksın?",
-        Role.SHIFOKOR: "🛡️ Kimi koruyacaksın?",
-        Role.GUVOH:    "👁️ Kimi takip edeceksin?",
-    }
-    verb = verbs.get(p.role, "🎯 Nishon tanlang")
-
+    player_lang = await db.get_language(uid)
+    verb = get_text(player_lang, "night_action_" + p.role.value)
     buttons = [
-        [InlineKeyboardButton(f"{p.role.emoji} {name}", callback_data=f"night:{uid2}")]
+        [InlineKeyboardButton(get_text(player_lang, "select_target", name=name), callback_data=f"night:{uid2}")]
         for uid2, name in alive_targets
     ]
-    buttons.append([InlineKeyboardButton("⏭ O'tkazib yuborish", callback_data="night:skip")])
+    buttons.append([InlineKeyboardButton(get_text(player_lang, "skip_action"), callback_data="night:skip")])
 
     try:
         await app.bot.send_message(
             chat_id=uid,
-            text=f"🌙 <b>Kecha harakati!</b>\n{verb}",
+            text=get_text(player_lang, "night_action_title", action=verb),
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(buttons),
         )
@@ -1152,33 +1255,33 @@ async def send_night_dm(app: Application, game: Game, uid: int) -> None:
 # ══════════════════════════════════════════════════════════════════
 # KEYBOARDS
 # ══════════════════════════════════════════════════════════════════
-def lobby_kb(n: int, is_host: bool) -> InlineKeyboardMarkup:
+def lobby_kb(n: int, is_host: bool, lang: str = "tr") -> InlineKeyboardMarkup:
     btns = [
-        [InlineKeyboardButton("🙋 Qo'shilish", callback_data="join"),
-         InlineKeyboardButton("🚪 Chiqish",    callback_data="leave")],
-        [InlineKeyboardButton("🤖 AI qo'shish", callback_data="add_ai")],
+        [InlineKeyboardButton(get_text(lang, "join_game"), callback_data="join"),
+         InlineKeyboardButton(get_text(lang, "leave_game"), callback_data="leave")],
+        [InlineKeyboardButton(get_text(lang, "add_ai"), callback_data="add_ai")],
     ]
     if is_host:
         if n >= MIN_PLAYERS:
             btns.append([InlineKeyboardButton(
-                f"▶️ Boshlash ({n} o'yinchi)", callback_data="start_now"
+                get_text(lang, "start_game_button", count=n), callback_data="start_now"
             )])
         else:
             btns.append([InlineKeyboardButton(
-                f"⚠️ Kamida {MIN_PLAYERS} kerak ({n}/{MIN_PLAYERS})", callback_data="noop"
+                get_text(lang, "need_players_button", count=n, minimum=MIN_PLAYERS), callback_data="noop"
             )])
         btns.append([InlineKeyboardButton(
-            f"⏰ +30s uzaytirish", callback_data="extend_lobby"
+            get_text(lang, "extend_lobby_button"), callback_data="extend_lobby"
         )])
     return InlineKeyboardMarkup(btns)
 
 
-def stats_kb() -> InlineKeyboardMarkup:
+def stats_kb(lang: str = "tr") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📈 Reyting",         callback_data="leaderboard"),
-         InlineKeyboardButton("👤 Mening stats",    callback_data="my_stats")],
-        [InlineKeyboardButton("🌍 Global stats",    callback_data="global_stats"),
-         InlineKeyboardButton("🏆 Yutuqlar",        callback_data="my_achievements")],
+        [InlineKeyboardButton(get_text(lang, "leaderboard_button"), callback_data="leaderboard"),
+         InlineKeyboardButton(get_text(lang, "my_stats_button"), callback_data="my_stats")],
+        [InlineKeyboardButton(get_text(lang, "global_stats_button"), callback_data="global_stats"),
+         InlineKeyboardButton(get_text(lang, "achievements_button"), callback_data="my_achievements")],
     ])
 
 
@@ -1323,11 +1426,30 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     lang = await db.get_language(user.id)
     if not await require_channel_membership(update, ctx):
         return
-    await update.message.reply_text(
-        get_text(lang, "welcome"),
-        parse_mode=ParseMode.HTML,
-        reply_markup=main_kb(lang),
-    )
+    if update.effective_chat.type == "private":
+        active_game = reg.find_user(user.id)
+        if active_game and not active_game.is_ended():
+            role_text = active_game.role_info(user.id, lang)
+            try:
+                await update.effective_message.reply_photo(
+                    photo=ROLE_IMAGES.get(active_game.players[user.id].role.value),
+                    caption=role_text, parse_mode=ParseMode.HTML
+                )
+            except TelegramError:
+                await update.effective_message.reply_text(role_text, parse_mode=ParseMode.HTML)
+            if active_game.phase == Phase.NIGHT:
+                await send_night_dm(ctx.application, active_game, user.id)
+            return
+    try:
+        await update.message.reply_photo(
+            photo=ROLE_IMAGES["fuqaro"], caption=get_text(lang, "welcome"),
+            parse_mode=ParseMode.HTML, reply_markup=main_kb(lang)
+        )
+    except TelegramError:
+        await update.message.reply_text(
+            get_text(lang, "welcome"), parse_mode=ParseMode.HTML,
+            reply_markup=main_kb(lang)
+        )
 
 
 async def cmd_language(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1344,10 +1466,10 @@ async def cmd_grouplanguage(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
     chat = update.effective_chat
     user = update.effective_user
     if chat.type not in ("group", "supergroup"):
-        await update.effective_message.reply_text("Bu komut yalnızca gruplarda kullanılabilir.")
+        await update.effective_message.reply_text(get_text(await db.get_language(user.id), "group_only"))
         return
     if not await is_group_admin(ctx, chat.id, user.id):
-        await update.effective_message.reply_text("❌ Grup dilini yalnızca grup yöneticileri değiştirebilir.")
+        await update.effective_message.reply_text(get_text(await db.get_group_language(chat.id), "group_admin_only"))
         return
     lang = await db.get_group_language(chat.id)
     await update.effective_message.reply_text(
@@ -1361,7 +1483,8 @@ async def cmd_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
     user = update.effective_user
     if chat.type not in ("group", "supergroup") or not await is_group_admin(ctx, chat.id, user.id):
-        await update.effective_message.reply_text("❌ Bu komut yalnızca grup yöneticilerine açıktır.")
+        lang = await db.get_group_language(chat.id) if chat.type in ("group", "supergroup") else await db.get_language(user.id)
+        await update.effective_message.reply_text(get_text(lang, "admin_only"))
         return
     lang = await db.get_group_language(chat.id)
     await update.effective_message.reply_text(
@@ -1373,35 +1496,18 @@ async def cmd_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not await require_channel_membership(update, ctx):
         return
-    await update.message.reply_text(
-        "🎭 <b>KVP GAME | Komutlar</b>\n\n"
-        "/newgame — Yeni oyun lobisi aç\n"
-        "/join — Oyuna katıl\n"
-        "/leave — Lobiden ayrıl\n"
-        "/startgame — Oyunu başlat (kurucu)\n"
-        "/endgame — Oyunu bitir (kurucu/yönetici)\n"
-        "/players — Oyuncu listesini gör\n"
-        "/myrole — Kendi rolünü öğren\n"
-        "/stats — İstatistikler\n"
-        "/help — Yardım\n"
-        "/language — Kişisel dili değiştir\n"
-        "/grouplanguage — Grup dilini değiştir (admin)\n"
-        "/admin — Yönetici komutları\n\n"
-        "<b>🎭 Roller</b>\n"
-        "👥 <b>Halk:</b> Konsey'i bulup gündüz oylamasında ele.\n"
-        "🔫 <b>Konsey Üyesi:</b> Her gece Baron ile birlikte hedef seç.\n"
-        "👑 <b>Baron Mehmet Karahanlı:</b> Konseyin lideridir; Komiser kontrolünde kimliği gizli kalır.\n"
-        "🕶️ <b>Polat Alemdar:</b> Her gece bir oyuncuyu soruşturur.\n"
-        "🛡️ <b>Aslan Akbey:</b> Her gece bir oyuncuyu saldırıdan korur.\n"
-        "👁️ <b>Abdülhey Çoban:</b> Bir oyuncunun gece hareketini takip eder.\n"
-        "💣 <b>Memati Baş:</b> Oylamayla elenirse rastgele bir oyuncuyu da yanında götürür.\n"
-        "🎭 <b>Hain:</b> Oylamayla elenirse kendi zaferini kazanır.\n\n"
-        "<b>🏆 Kazanma koşulları</b>\n"
-        "👥 Halk ve istihbarat ekibi: Konsey tamamen elenirse kazanır.\n"
-        "🔫 Konsey: Konsey sayısı yaşayan diğer oyunculara eşitlenirse kazanır.\n"
-        "🎭 Hain: Gündüz oylamasıyla elenirse kazanır.",
-        parse_mode=ParseMode.HTML,
-    )
+    chat = update.effective_chat
+    if chat and chat.type in ("group", "supergroup"):
+        lang = await db.get_group_language(chat.id)
+    else:
+        lang = await db.get_language(update.effective_user.id)
+    try:
+        await update.effective_message.reply_photo(
+            photo=ROLE_IMAGES["mafia"], caption=get_text(lang, "help_message"),
+            parse_mode=ParseMode.HTML
+        )
+    except TelegramError:
+        await update.effective_message.reply_text(get_text(lang, "help_message"), parse_mode=ParseMode.HTML)
 
 
 async def cmd_newgame(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1413,23 +1519,17 @@ async def cmd_newgame(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     reg.cleanup()
     existing = reg.get(chat_id)
     if existing and not existing.is_ended():
-        await update.message.reply_text(
-            "⚠️ O'yin allaqachon ketmoqda!\n/endgame bilan tugatib, qaytadan /newgame yozing."
-        )
+        await update.message.reply_text(get_text(await db.get_group_language(chat_id), "game_already"))
         return
 
     send_fn = make_send(ctx.application)
     group_lang = await db.get_group_language(chat_id)
-    g = reg.new(chat_id, send_fn, group_lang)
+    g = reg.new(chat_id, send_fn, group_lang, app=ctx.application)
     g.join(user.id, user.full_name)
 
     msg = await update.message.reply_text(
-        f"🎮 <b>Yangi o'yin lobbisi ochildi!</b>\n"
-        f"🏠 Host: <b>{user.full_name}</b>\n\n"
-        f"O'yinchilar (1/{MAX_PLAYERS}):\n  ✅ {user.full_name}\n\n"
-        f"⏱ <b>{LOBBY_TIMEOUT} soniya</b> ichida qo'shiling!",
-        parse_mode=ParseMode.HTML,
-        reply_markup=lobby_kb(1, is_host=True),
+        get_text(g.lang, "lobby_created", name=user.full_name, maximum=MAX_PLAYERS, seconds=LOBBY_TIMEOUT),
+        parse_mode=ParseMode.HTML, reply_markup=lobby_kb(1, is_host=True, lang=g.lang),
     )
 
     # Start lobby countdown
@@ -1444,22 +1544,21 @@ async def cmd_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     g = reg.get(chat_id)
 
     if not g or g.is_ended():
-        await update.message.reply_text("❌ Faol lobby yo'q. /newgame yozing.")
+        await update.message.reply_text(get_text(await db.get_group_language(chat_id), "no_lobby"))
         return
     if g.phase != Phase.LOBBY:
-        await update.message.reply_text("❌ O'yin boshlangan! Keyingi o'yinga kuting.")
+        await update.message.reply_text(get_text(g.lang, "game_started_wait"))
         return
     if g.join(user.id, user.full_name):
         n = g.n()
         plist = "\n".join(f"  ✅ {p.name}" for p in g.players.values())
         await update.message.reply_text(
-            f"✅ <b>{user.full_name}</b> qo'shildi! ({n}/{MAX_PLAYERS})\n\n"
-            f"<b>O'yinchilar:</b>\n{plist}",
+            get_text(g.lang, "lobby_joined", name=user.full_name, count=n, maximum=MAX_PLAYERS, players=plist),
             parse_mode=ParseMode.HTML,
-            reply_markup=lobby_kb(n, is_host=(user.id == g.host_id)),
+            reply_markup=lobby_kb(n, is_host=(user.id == g.host_id), lang=g.lang),
         )
     else:
-        await update.message.reply_text("⚠️ Allaqachon qo'shilgansiz yoki joy yo'q.")
+        await update.message.reply_text(get_text(g.lang, "already_joined"))
 
 
 async def cmd_leave(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1469,17 +1568,17 @@ async def cmd_leave(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user    = update.effective_user
     g = reg.get(chat_id)
     if not g or g.phase != Phase.LOBBY:
-        await update.message.reply_text("❌ Faol lobby yo'q.")
+        await update.message.reply_text(get_text(await db.get_group_language(chat_id), "no_lobby"))
         return
     if g.leave(user.id):
         n = g.n()
         await update.message.reply_text(
-            f"👋 <b>{user.full_name}</b> chiqdi. ({n}/{MAX_PLAYERS})",
+            get_text(g.lang, "lobby_left", name=user.full_name, count=n, maximum=MAX_PLAYERS),
             parse_mode=ParseMode.HTML,
-            reply_markup=lobby_kb(n, is_host=(user.id == g.host_id)),
+            reply_markup=lobby_kb(n, is_host=(user.id == g.host_id), lang=g.lang),
         )
     else:
-        await update.message.reply_text("❌ Lobbida emassiz.")
+        await update.message.reply_text(get_text(g.lang, "not_in_lobby"))
 
 
 async def cmd_startgame(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1489,33 +1588,15 @@ async def cmd_startgame(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user    = update.effective_user
     g = reg.get(chat_id)
     if not g:
-        await update.message.reply_text("❌ Faol lobby yo'q. /newgame yozing.")
+        await update.message.reply_text(get_text(await db.get_group_language(chat_id), "no_lobby"))
         return
     if user.id != g.host_id and not await is_group_admin(ctx, chat_id, user.id):
-        await update.message.reply_text("❌ Faqat o'yin egasi yoki guruh administratori boshlashi mumkin.")
+        await update.message.reply_text(get_text(g.lang, "start_admin"))
         return
     result = await g.start_game()
     if result != "ok":
         await update.message.reply_text(result)
         return
-    # Send role DMs
-    for p in g.players.values():
-        if p.is_ai:
-            continue
-        try:
-            await ctx.application.bot.send_message(
-                chat_id=p.user_id,
-                text=g.role_info(p.user_id),
-                parse_mode=ParseMode.HTML,
-            )
-            if p.role.has_night_action:
-                await send_night_dm(ctx.application, g, p.user_id)
-        except Forbidden:
-            await update.message.reply_text(
-                f"⚠️ <b>{p.name}</b> ga xabar jo'natib bo'lmadi!\n"
-                f"Iltimos, avval botga /start yuboring.",
-                parse_mode=ParseMode.HTML,
-            )
 
 
 async def cmd_endgame(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1525,15 +1606,15 @@ async def cmd_endgame(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user    = update.effective_user
     g = reg.get(chat_id)
     if not g:
-        await update.message.reply_text("❌ Faol o'yin yo'q.")
+        await update.message.reply_text(get_text(await db.get_group_language(chat_id), "no_game"))
         return
     is_adm = await is_group_admin(ctx, chat_id, user.id)
     if user.id != g.host_id and not is_adm:
-        await update.message.reply_text("❌ Faqat host yoki admin tugatishi mumkin.")
+        await update.message.reply_text(get_text(g.lang, "only_host_admin"))
         return
     await g.force_end()
     reg.remove(chat_id)
-    await update.message.reply_text("🛑 Oyun zorla sonlandırıldı.")
+    await update.message.reply_text(get_text(g.lang, "game_forced_end"))
 
 
 async def cmd_players(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1541,14 +1622,14 @@ async def cmd_players(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     g = reg.get(update.effective_chat.id)
     if not g:
-        await update.message.reply_text("❌ Faol o'yin yo'q.")
+        await update.message.reply_text(get_text(await db.get_group_language(update.effective_chat.id), "no_game"))
         return
-    lines = [f"👥 <b>O'yin #{g.game_id} | Faza: {g.phase.name}</b>\n"]
+    lines = [get_text(g.lang, "players_title", game_id=g.game_id, phase=get_text(g.lang, "phase_" + g.phase.name.lower())) + "\n"]
     for p in g.players.values():
         icon = "✅" if p.is_alive else "💀"
-        ai   = " 🤖" if p.is_ai else ""
+        ai = " 🤖" if p.is_ai else ""
         lines.append(f"  {icon} {p.name}{ai}")
-    lines.append(f"\n⏱ Tur: {g.round}")
+    lines.append("\n⏱ " + get_text(g.lang, "round_label", round=g.round))
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
@@ -1558,19 +1639,42 @@ async def cmd_myrole(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     uid = update.effective_user.id
     g = reg.find_user(uid)
     if not g:
-        await update.message.reply_text("❌ Siz faol o'yinda emassiz.")
+        await update.effective_message.reply_text(get_text(await db.get_language(uid), "not_in_game"))
         return
-    await update.message.reply_text(g.role_info(uid), parse_mode=ParseMode.HTML)
+    if update.effective_chat.type != "private":
+        me = await ctx.bot.get_me()
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(
+            get_text(await db.get_language(uid), "open_private_role"),
+            url=f"https://t.me/{me.username}?start=play"
+        )]])
+        await update.effective_message.reply_text(get_text(g.lang, "role_private_only"), reply_markup=kb)
+        return
+    player_lang = await db.get_language(uid)
+    role_text = g.role_info(uid, player_lang)
+    try:
+        await update.effective_message.reply_photo(
+            photo=ROLE_IMAGES.get(g.players[uid].role.value), caption=role_text,
+            parse_mode=ParseMode.HTML
+        )
+    except TelegramError:
+        await update.effective_message.reply_text(role_text, parse_mode=ParseMode.HTML)
+    if g.phase == Phase.NIGHT:
+        await send_night_dm(ctx.application, g, uid)
 
 
 async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not await require_channel_membership(update, ctx):
         return
-    await update.message.reply_text(
-        "📊 <b>Statistika</b> — nimani ko'rmoqchisiz?",
-        parse_mode=ParseMode.HTML,
-        reply_markup=stats_kb(),
-    )
+    lang = await db.get_group_language(update.effective_chat.id) if update.effective_chat.type in ("group", "supergroup") else await db.get_language(update.effective_user.id)
+    try:
+        await update.effective_message.reply_photo(
+            photo=ROLE_IMAGES["fuqaro"], caption=get_text(lang, "stats_title"),
+            parse_mode=ParseMode.HTML, reply_markup=stats_kb(lang)
+        )
+    except TelegramError:
+        await update.effective_message.reply_text(
+            get_text(lang, "stats_title"), parse_mode=ParseMode.HTML, reply_markup=stats_kb(lang)
+        )
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1585,23 +1689,20 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     if data == "channel_link_missing":
         lang = await db.get_language(uid)
-        await q.answer(
-            "Kanal bağlantısı ayarlanmamış. Bot yöneticisi CHANNEL_JOIN_URL değerini eklemeli.",
-            show_alert=True,
-        )
+        await q.answer(get_text(lang, "channel_url_missing"), show_alert=True)
         return
 
     # Group language selection is restricted to group administrators.
     if data.startswith("group_lang:"):
         if q.message is None or q.message.chat.type not in ("group", "supergroup"):
-            await q.answer("Bu seçim yalnızca gruplarda kullanılabilir.", show_alert=True)
+            await q.answer(get_text(await db.get_language(uid), "group_only"), show_alert=True)
             return
         if not await is_group_admin(ctx, q.message.chat_id, uid):
-            await q.answer("❌ Yalnızca grup yöneticileri dili değiştirebilir.", show_alert=True)
+            await q.answer(get_text(await db.get_group_language(q.message.chat_id), "group_admin_only"), show_alert=True)
             return
         selected = data.split(":", 1)[1]
         if selected not in LANGUAGES:
-            await q.answer("Desteklenmeyen dil.", show_alert=True)
+            await q.answer(get_text(await db.get_group_language(q.message.chat_id), "unsupported_language"), show_alert=True)
             return
         await db.set_group_language(q.message.chat_id, selected)
         current_game = reg.get(q.message.chat_id)
@@ -1618,7 +1719,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if data.startswith("lang:"):
         selected = data.split(":", 1)[1]
         if selected not in LANGUAGES:
-            await q.answer("Unsupported language", show_alert=True)
+            await q.answer(get_text(await db.get_language(uid), "unsupported_language"), show_alert=True)
             return
         await db.set_language(uid, selected)
         await q.answer()
@@ -1657,7 +1758,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if not await require_channel_membership(update, ctx):
-        await q.answer("🔒 Avval majburiy kanalga a'zo bo'ling.", show_alert=True)
+        await q.answer(get_text(await db.get_language(uid), "channel_required_alert"), show_alert=True)
         return
 
     try:
@@ -1667,28 +1768,19 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             return
 
         elif data == "new_game":
-            await q.answer("Guruh chatda /newgame yozing!", show_alert=True)
+            await q.answer(get_text(await db.get_group_language(cid), "newgame_group"), show_alert=True)
             return
 
         elif data == "howto":
-            await q.answer(
-                "🌙 Kecha: rollar harakat qiladi\n"
-                "☀️ Kun: muhokama (60s)\n"
-                "🗳 Ovoz: kim chiqarilsin (45s)\n"
-                "⚖️ Himoya: 25s gapirishga ruxsat\n\n"
-                "🏙 Halk kazanır: Konsey tamamen elenirse\n"
-                "🔫 Konsey kazanır: Sayısı diğer yaşayan oyunculara eşitlenirse\n"
-                "🎭 Hain kazanır: Gündüz oylamasıyla elenirse",
-                show_alert=True
-            )
+            await q.answer(get_text(await db.get_group_language(cid), "help_message")[:190], show_alert=True)
             return
 
         elif data == "stats_menu":
             await q.answer()
             await q.edit_message_text(
-                "📊 <b>Statistika</b>",
+                get_text(await db.get_group_language(cid), "stats_title"),
                 parse_mode=ParseMode.HTML,
-                reply_markup=stats_kb(),
+                reply_markup=stats_kb(await db.get_group_language(cid)),
             )
             return
 
@@ -1696,71 +1788,69 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         elif data == "leaderboard":
             rows = await db.get_leaderboard()
             if not rows:
-                await q.answer("Hali statistika yo'q!", show_alert=True)
+                await q.answer(get_text(await db.get_language(uid), "no_stats"), show_alert=True)
                 return
             medals = ["🥇","🥈","🥉"] + ["🏅"]*20
-            lines = ["📈 <b>ELO Reytingi:</b>\n"]
+            lines = [get_text(await db.get_language(uid), "leaderboard_title") + "\n"]
             for i, r in enumerate(rows):
                 lines.append(
-                    f"{medals[i]} <b>{r['username']}</b> — "
-                    f"ELO: <b>{r['elo']}</b> | {r['wins']}G/{r['games']}O ({r['wr']}%)"
+                    f"{medals[i]} <b>{r['username']}</b> — " +
+                    get_text(await db.get_language(uid), "leaderboard_row", elo=r['elo'], wins=r['wins'], games=r['games'], wr=r['wr'])
                 )
             try:
                 await ctx.application.bot.send_message(
                     uid, "\n".join(lines), parse_mode=ParseMode.HTML
                 )
-                await q.answer("DM ga yuborildi! ✅")
+                await q.answer(get_text(await db.get_language(uid), "dm_leaderboard"))
             except Forbidden:
                 await q.answer("\n".join(lines)[:200], show_alert=True)
 
         elif data == "my_stats":
             s = await db.get_stats(uid)
             if not s:
-                await q.answer("Hali o'yin o'ynamagansiz!", show_alert=True)
+                await q.answer(get_text(await db.get_language(uid), "not_played"), show_alert=True)
                 return
             wr = round(s["wins"] / max(s["games"], 1) * 100, 1)
-            rw_lines = "\n".join(
-                f"  {Role(r).emoji} {Role(r).uz_name}: {c} marta"
-                for r, c in sorted(s["role_wins"].items(), key=lambda x: -x[1])
-            ) or "  —"
-            msg = (
-                f"👤 <b>{s['username']}</b>\n\n"
-                f"🎮 O'yinlar: {s['games']}\n"
-                f"🏆 G'alabalar: {s['wins']} ({wr}%)\n"
-                f"💀 Mag'lubiyat: {s['losses']}\n"
-                f"🛡 Tirik qoldi: {s['survived']}\n"
-                f"📈 ELO: <b>{s['elo']}</b>\n"
-                f"🔥 Eng uzun streak: {s['best_streak']}\n\n"
-                f"<b>Rol g'alabalari:</b>\n{rw_lines}"
-            )
+            rw_rows = []
+            lang = await db.get_language(uid)
+            for role_code, count in sorted(s["role_wins"].items(), key=lambda x: -x[1]):
+                role_name, _ = get_role_text(lang, role_code)
+                try:
+                    role_emoji = Role(role_code).emoji
+                except ValueError:
+                    role_emoji = "🎭"
+                rw_rows.append(f"  {role_emoji} {role_name}: {count}")
+            rw_lines = "\n".join(rw_rows) or "  —"
+            msg = get_text(lang, "personal_stats", username=s['username'], games=s['games'],
+                           wins=s['wins'], wr=wr, losses=s['losses'], survived=s['survived'],
+                           elo=s['elo'], streak=s['best_streak'], roles=rw_lines)
             try:
                 await ctx.application.bot.send_message(uid, msg, parse_mode=ParseMode.HTML)
-                await q.answer("Stats DM ga yuborildi! ✅")
+                await q.answer(get_text(lang, "dm_stats"))
             except Forbidden:
                 await q.answer(msg[:200], show_alert=True)
 
         elif data == "global_stats":
             g_data = await db.get_global()
             if not g_data or not g_data.get("total"):
-                await q.answer("Hali global statistika yo'q!", show_alert=True)
+                await q.answer(get_text(await db.get_language(uid), "no_stats"), show_alert=True)
                 return
-            await q.answer(
-                f"🌍 Jami: {int(g_data['total']or 0)} o'yin\n"
-                f"🏙 Fuqaro: {int(g_data['town']or 0)}\n"
-                f"🔫 Mafia: {int(g_data['mafia']or 0)}\n"
-                f"☠️ Suicid: {int(g_data['suicid']or 0)}\n"
-                f"O'rtacha o'yinchi: {round(g_data['avg_p']or 0,1)}",
-                show_alert=True
-            )
+            lang = await db.get_language(uid)
+            await q.answer(get_text(lang, "global_stats", total=int(g_data['total'] or 0),
+                                     town=int(g_data['town'] or 0), mafia=int(g_data['mafia'] or 0),
+                                     suicid=int(g_data['suicid'] or 0), average=round(g_data['avg_p'] or 0, 1)),
+                           show_alert=True)
 
         elif data == "my_achievements":
             s = await db.get_stats(uid)
             if not s:
-                await q.answer("Hali o'yin o'ynamagansiz!", show_alert=True)
+                await q.answer(get_text(await db.get_language(uid), "not_played"), show_alert=True)
                 return
             earned = db._get_achievements(s)
-            lines = ["🏅 <b>Yutuqlar:</b>\n"]
-            for key, (emoji, title, desc) in ACHIEVEMENTS_DEF.items():
+            lines = ["🏅 <b>" + get_text(await db.get_language(uid), "achievements_title") + "</b>\n"]
+            lang = await db.get_language(uid)
+            for key, (emoji, _title, _desc) in ACHIEVEMENTS_DEF.items():
+                title, desc = get_achievement_text(lang, key)
                 if key in earned:
                     lines.append(f"{emoji} <b>{title}</b> — {desc}")
                 else:
@@ -1769,7 +1859,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 await ctx.application.bot.send_message(
                     uid, "\n".join(lines), parse_mode=ParseMode.HTML
                 )
-                await q.answer("Yutuqlar DM ga yuborildi! ✅")
+                await q.answer(get_text(await db.get_language(uid), "dm_achievements"))
             except Forbidden:
                 await q.answer("\n".join(lines)[:200], show_alert=True)
 
@@ -1777,20 +1867,19 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         elif data == "join":
             g = reg.get(cid)
             if not g or g.phase != Phase.LOBBY:
-                await q.answer("Faol lobby yo'q!", show_alert=True)
+                await q.answer(get_text(await db.get_group_language(cid), "active_lobby"), show_alert=True)
                 return
             if g.join(uid, name):
                 await q.answer()
                 n = g.n()
                 plist = "\n".join(f"  ✅ {p.name}" for p in g.players.values())
                 await q.edit_message_text(
-                    f"🎮 <b>Lobby</b> — {n}/{MAX_PLAYERS}\n\n"
-                    f"<b>O'yinchilar:</b>\n{plist}",
+                    get_text(g.lang, "lobby_joined", name=name, count=n, maximum=MAX_PLAYERS, players=plist),
                     parse_mode=ParseMode.HTML,
-                    reply_markup=lobby_kb(n, is_host=(uid == g.host_id)),
+                    reply_markup=lobby_kb(n, is_host=(uid == g.host_id), lang=g.lang),
                 )
             else:
-                await q.answer("Allaqachon qo'shilgansiz yoki joy yo'q!", show_alert=True)
+                await q.answer(get_text(g.lang, "already_joined"), show_alert=True)
 
         elif data == "leave":
             g = reg.get(cid)
@@ -1799,42 +1888,40 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 n = g.n()
                 plist = "\n".join(f"  ✅ {p.name}" for p in g.players.values()) or "(bo'sh)"
                 await q.edit_message_text(
-                    f"🎮 <b>Lobby</b> — {n}/{MAX_PLAYERS}\n\n"
-                    f"<b>O'yinchilar:</b>\n{plist}",
+                    get_text(g.lang, "lobby_joined", name=name, count=n, maximum=MAX_PLAYERS, players=plist),
                     parse_mode=ParseMode.HTML,
-                    reply_markup=lobby_kb(n, is_host=(uid == g.host_id)),
+                    reply_markup=lobby_kb(n, is_host=(uid == g.host_id), lang=g.lang),
                 )
             else:
-                await q.answer("Lobbida emassiz.", show_alert=True)
+                await q.answer(get_text(g.lang if g else await db.get_group_language(cid), "not_in_lobby"), show_alert=True)
 
         elif data == "add_ai":
             g = reg.get(cid)
             if not g or g.phase != Phase.LOBBY:
-                await q.answer("Faol lobby yo'q!", show_alert=True)
+                await q.answer(get_text(await db.get_group_language(cid), "active_lobby"), show_alert=True)
                 return
             if uid != g.host_id and not await is_group_admin(ctx, cid, uid):
-                await q.answer("Faqat o'yin egasi yoki guruh administratori AI qo'sha oladi!", show_alert=True)
+                await q.answer(get_text(g.lang, "ai_admin"), show_alert=True)
                 return
             if g.add_ai():
                 await q.answer()
                 n = g.n()
                 plist = "\n".join(f"  ✅ {p.name}" for p in g.players.values())
                 await q.edit_message_text(
-                    f"🎮 <b>Lobby</b> — {n}/{MAX_PLAYERS}\n\n"
-                    f"<b>O'yinchilar:</b>\n{plist}",
+                    get_text(g.lang, "lobby_joined", name=name, count=n, maximum=MAX_PLAYERS, players=plist),
                     parse_mode=ParseMode.HTML,
-                    reply_markup=lobby_kb(n, is_host=True),
+                    reply_markup=lobby_kb(n, is_host=True, lang=g.lang),
                 )
             else:
-                await q.answer("Maksimal AI yoki lobby to'liq.", show_alert=True)
+                await q.answer(get_text(g.lang, "ai_limit"), show_alert=True)
 
         elif data == "extend_lobby":
             g = reg.get(cid)
             if not g:
-                await q.answer("Lobby topilmadi!", show_alert=True)
+                await q.answer(get_text(await db.get_group_language(cid), "active_lobby"), show_alert=True)
                 return
             if uid != g.host_id and not await is_group_admin(ctx, cid, uid):
-                await q.answer("Faqat o'yin egasi yoki guruh administratori uzaytira oladi.", show_alert=True)
+                await q.answer(get_text(g.lang, "extend_admin"), show_alert=True)
                 return
             result = await g.extend_lobby(uid)
             await q.answer(result, show_alert=True)
@@ -1842,48 +1929,36 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         elif data == "start_now":
             g = reg.get(cid)
             if not g:
-                await q.answer("Lobby topilmadi!", show_alert=True)
+                await q.answer(get_text(await db.get_group_language(cid), "active_lobby"), show_alert=True)
                 return
             if uid != g.host_id and not await is_group_admin(ctx, cid, uid):
-                await q.answer("Faqat o'yin egasi yoki guruh administratori boshlayabilir!", show_alert=True)
+                await q.answer(get_text(g.lang, "start_admin"), show_alert=True)
                 return
             if g.n() < MIN_PLAYERS:
-                await q.answer(f"Kamida {MIN_PLAYERS} o'yinchi kerak!", show_alert=True)
+                await q.answer(get_text(g.lang, "start_min", minimum=MIN_PLAYERS), show_alert=True)
                 return
             await q.answer()
-            await q.edit_message_text("⏳ O'yin boshlanmoqda...", parse_mode=ParseMode.HTML)
+            await q.edit_message_text(get_text(g.lang, "starting_game"), parse_mode=ParseMode.HTML)
             result = await g.start_game()
-            if result == "ok":
-                for p in g.players.values():
-                    if p.is_ai:
-                        continue
-                    try:
-                        await ctx.application.bot.send_message(
-                            p.user_id, g.role_info(p.user_id), parse_mode=ParseMode.HTML
-                        )
-                        if p.role.has_night_action:
-                            await send_night_dm(ctx.application, g, p.user_id)
-                    except Forbidden:
-                        await safe_send(
-                            ctx.application, cid,
-                            f"⚠️ <b>{p.name}</b> ga DM yuborib bo'lmadi! "
-                            f"Iltimos, botga /start yuboring."
-                        )
-            else:
+            if result != "ok":
                 await safe_send(ctx.application, cid, result)
 
         # ── night action ───────────────────────────────────────
         elif data.startswith("night:"):
             ts = data.split(":", 1)[1]
-            if ts == "skip":
-                await q.answer()
-                await q.edit_message_text("✅ Kecha harakati o'tkazib yuborildi.")
-                return
             g = reg.find_user(uid)
             if not g:
-                await q.answer("O'yinda emassiz.", show_alert=True)
+                await q.answer(get_text(await db.get_language(uid), "not_in_game"), show_alert=True)
                 return
-            fb = await g.record_action(uid, int(ts))
+            if ts == "skip":
+                fb = await g.skip_action(uid, await db.get_language(uid))
+                await q.answer(fb)
+                try:
+                    await q.edit_message_text(fb)
+                except TelegramError:
+                    pass
+                return
+            fb = await g.record_action(uid, int(ts), await db.get_language(uid))
             await q.answer()
             await q.edit_message_text(fb, parse_mode=ParseMode.HTML)
 
@@ -1892,12 +1967,12 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             ts = data.split(":", 1)[1]
             g = reg.get(cid)
             if not g:
-                await q.answer("Faol o'yin yo'q.", show_alert=True)
+                await q.answer(get_text(await db.get_group_language(cid), "no_game"), show_alert=True)
                 return
             if ts == "skip":
-                await q.answer("Betaraf qoldingiz.")
+                await q.answer(get_text(await db.get_language(uid), "vote_skip"))
                 return
-            fb = g.cast_vote(uid, int(ts))
+            fb = g.cast_vote(uid, int(ts), await db.get_language(uid))
             await q.answer(fb)
 
         elif data == "skip_to_vote":
@@ -1910,7 +1985,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception as e:
         log.exception("Callback xato (data=%s): %s", data, e)
         try:
-            await q.answer("⚠️ Xatolik yuz berdi.", show_alert=True)
+            await q.answer(get_text(await db.get_group_language(cid), "callback_error"), show_alert=True)
         except Exception:
             pass
 
@@ -1924,7 +1999,7 @@ async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if isinstance(update, Update) and update.effective_message:
         try:
-            await update.effective_message.reply_text("⚠️ Kutilmagan xatolik yuz berdi.")
+            await update.effective_message.reply_text(get_text(await db.get_language(update.effective_user.id), "unexpected_error"))
         except Exception:
             pass
 
@@ -1951,6 +2026,15 @@ async def post_init(app: Application) -> None:
     ]
     await app.bot.set_my_commands(tr_commands)
     await app.bot.set_my_commands(tr_commands, language_code="tr")
+    command_sets = {
+        "en": [BotCommand("start", "Start bot"), BotCommand("newgame", "Create game lobby"), BotCommand("join", "Join game"), BotCommand("leave", "Leave lobby"), BotCommand("startgame", "Start game"), BotCommand("endgame", "End game"), BotCommand("players", "Show players"), BotCommand("myrole", "Show your role"), BotCommand("stats", "Show statistics"), BotCommand("help", "Help and rules"), BotCommand("language", "Change language"), BotCommand("grouplanguage", "Change group language"), BotCommand("admin", "Admin commands")],
+        "ru": [BotCommand("start", "Запустить бота"), BotCommand("newgame", "Создать игру"), BotCommand("join", "Войти в игру"), BotCommand("leave", "Выйти из лобби"), BotCommand("startgame", "Начать игру"), BotCommand("endgame", "Завершить игру"), BotCommand("players", "Список игроков"), BotCommand("myrole", "Моя роль"), BotCommand("stats", "Статистика"), BotCommand("help", "Помощь и правила"), BotCommand("language", "Сменить язык"), BotCommand("grouplanguage", "Язык группы"), BotCommand("admin", "Команды админа")],
+        "uz": [BotCommand("start", "Botni ishga tushirish"), BotCommand("newgame", "Yangi o‘yin yaratish"), BotCommand("join", "O‘yinga qo‘shilish"), BotCommand("leave", "Lobbidan chiqish"), BotCommand("startgame", "O‘yinni boshlash"), BotCommand("endgame", "O‘yinni tugatish"), BotCommand("players", "O‘yinchilar ro‘yxati"), BotCommand("myrole", "Rolimni ko‘rish"), BotCommand("stats", "Statistika"), BotCommand("help", "Yordam va qoidalar"), BotCommand("language", "Tilni o‘zgartirish"), BotCommand("grouplanguage", "Guruh tilini o‘zgartirish"), BotCommand("admin", "Admin buyruqlari")],
+        "ar": [BotCommand("start", "تشغيل البوت"), BotCommand("newgame", "إنشاء لعبة"), BotCommand("join", "الانضمام للعبة"), BotCommand("leave", "مغادرة اللعبة"), BotCommand("startgame", "بدء اللعبة"), BotCommand("endgame", "إنهاء اللعبة"), BotCommand("players", "قائمة اللاعبين"), BotCommand("myrole", "دوري"), BotCommand("stats", "الإحصائيات"), BotCommand("help", "المساعدة والقواعد"), BotCommand("language", "تغيير اللغة"), BotCommand("grouplanguage", "لغة المجموعة"), BotCommand("admin", "أوامر المشرف")],
+        "de": [BotCommand("start", "Bot starten"), BotCommand("newgame", "Neue Lobby erstellen"), BotCommand("join", "Spiel beitreten"), BotCommand("leave", "Lobby verlassen"), BotCommand("startgame", "Spiel starten"), BotCommand("endgame", "Spiel beenden"), BotCommand("players", "Spielerliste"), BotCommand("myrole", "Meine Rolle"), BotCommand("stats", "Statistik"), BotCommand("help", "Hilfe und Regeln"), BotCommand("language", "Sprache ändern"), BotCommand("grouplanguage", "Gruppensprache"), BotCommand("admin", "Admin-Befehle")],
+    }
+    for code, commands in command_sets.items():
+        await app.bot.set_my_commands(commands, language_code=code)
 
     async def _cleanup():
         while True:
