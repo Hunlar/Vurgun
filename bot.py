@@ -29,7 +29,7 @@ from telegram.ext import (
     Application, ApplicationBuilder, CallbackQueryHandler,
     CommandHandler, ContextTypes, MessageHandler, filters,
 )
-from languages import LANGUAGES, get_text, get_role_text, get_achievement_text
+from languages import LANGUAGES, get_text, get_role_text as _get_role_text, get_achievement_text
 
 # ══════════════════════════════════════════════════════════════════
 # LOGGING
@@ -71,6 +71,21 @@ OWNER_IDS = {
 SUPPORT_URL = os.environ.get("SUPPORT_URL", "").strip()
 
 
+def get_role_text(lang: str, role: str) -> tuple[str, str]:
+    """Return localized role text, including the KVP-only Süleyman Çakır role."""
+    cakir = {
+        "tr": ("Süleyman Çakır", "Halk takımındasınız. Özel bir gece yeteneğiniz yok; Konsey'i bulup gündüz oylamasında eleyin."),
+        "en": ("Suleyman Cakir", "You are on the town team. You have no night ability; find and vote out the Council."),
+        "ru": ("Сулейман Чакыр", "Вы в команде горожан. У вас нет ночной способности; найдите Совет и исключите его голосованием."),
+        "uz": ("Süleyman Çakır", "Siz xalq jamoasidasiz. Tungi qobiliyatingiz yo‘q; Kengashni topib, kunduzgi ovozda chiqaring."),
+        "ar": ("سليمان جاكير", "أنت ضمن فريق المواطنين. ليست لديك قدرة ليلية؛ اكتشف أعضاء المجلس وأقصهم بالتصويت."),
+        "de": ("Süleyman Çakır", "Du gehörst zum Bürgerteam. Du hast keine Nachtfähigkeit; finde den Rat und wähle ihn tagsüber ab."),
+    }
+    if role == "cakir":
+        return cakir.get(lang, cakir["tr"])
+    return _get_role_text(lang, role)
+
+
 AI_NAMES = [
     "🤖 Alice", "🤖 Bob", "🤖 Carlos", "🤖 Diana",
     "🤖 Erik", "🤖 Fatima", "🤖 George", "🤖 Hana",
@@ -86,16 +101,41 @@ ROLE_IMAGES = {
     "shifokor": "https://i.pinimg.com/736x/b0/5e/71/b05e718d3d2d94f231671eb26e348799.jpg",
     "guvoh": "https://i.pinimg.com/736x/2b/ce/24/2bce2410d1a0e038c1886937386d9a03.jpg",
     "kamikaze": "https://i1.sndcdn.com/artworks-000069787979-c3vbuc-t1080x1080.jpg",
+    "cakir": "https://media.cumhuriyet.com.tr/Archive/2021/4/16/1828754/kapak_224317.jpg",
     "suicid": "https://cdn.karar.com/news/1389096.jpg",
 }
 
-# Kurtlar Vadisi'nden ölüm/cenaze atmosferli sahne görselleri.
-# Kaynaklar IMAGE_SOURCES.md içinde listelenmiştir.
+# Ölüm görselleri: seçimle infaz ve gece öldürülmesi ayrı ele alınır.
+# Görsel URL'leri IMAGE_SOURCES.md içinde belgelenmiştir.
+TEMPLAR_VOTE_IMAGE = (
+    "https://seyler.ekstat.com/img/max/800/8/8pidqdHBsBRlKneV-637316228192728472.jpg"
+)
+BARON_TEMPLAR_DEATH_IMAGE = "https://img.youtube.com/vi/eziAMoyvX64/hqdefault.jpg"
+COUNCIL_DEATH_IMAGES = [
+    "https://galeri13.uludagsozluk.com/726/iplikci-nedim_1281287.jpg",
+    "https://galeri13.uludagsozluk.com/678/nizamettin-guvenc_1291207_m.jpg",
+    "https://img.youtube.com/vi/W7XsOKR6cag/hqdefault.jpg",
+    "https://img.youtube.com/vi/hqf5QdXYyd8/hqdefault.jpg",
+]
 DEATH_SCENE_IMAGES = [
     "https://img.memurlar.net/galeri/3980/d801bd9a-8f47-e311-a39c-14feb5cc1801.jpg?width=800",
     "https://iv.okcdn.ru/i?fn=external_8&r=BEH7dJIjJJO0pjyIf46vcZ9AfED7ECzB4qghX2xk2M0qvfFUHBkc-axEloUKxdMNjrS5CqdNleAEysdLnA60zUgQ",
     "https://image.kanald.com.tr/i/kanald/100/1200x0/56b44c756ce43628c0a1b2f2.jpg",
+    "https://pbs.twimg.com/media/G96A-4SagAAsTeQ.jpg",
+    "https://img.internethaber.com/rcman/Cw1280h720q95gc/files/2016/4/1/1580431/1580431.jpg",
+    "https://s1.dmcdn.net/v/OujRi1VcLUMkiAUyf/x1080",
+    "https://iv.okcdn.ru/videoPreview?fn=external_8&i=1&id=218952566234&idx=30&tkn=sfpQ1fGjUhcoLFnMWuKJzMv_DCU&type=47",
+    "https://image.kanald.com.tr/i/kanald/100/1200x630/54ca54f4f493b80b48a1525f.jpg",
 ]
+
+def death_image_for(role: "Role", cause: str) -> str:
+    """Select a scene by elimination cause and character faction."""
+    if cause == "vote":
+        return BARON_TEMPLAR_DEATH_IMAGE if role == Role.DON else TEMPLAR_VOTE_IMAGE
+    if role == Role.MAFIA:
+        return random.choice(COUNCIL_DEATH_IMAGES)
+    return random.choice(DEATH_SCENE_IMAGES)
+
 
 # ══════════════════════════════════════════════════════════════════
 # ENUMS & MODELS
@@ -108,6 +148,7 @@ class Role(Enum):
     SHIFOKOR = "shifokor"
     GUVOH    = "guvoh"
     KAMIKAZE = "kamikaze"
+    CAKIR    = "cakir"
     SUICID   = "suicid"
 
     @property
@@ -121,6 +162,7 @@ class Role(Enum):
             Role.SHIFOKOR: "🛡️",
             Role.GUVOH:    "👁️",
             Role.KAMIKAZE: "💣",
+            Role.CAKIR:    "🥃",
             Role.SUICID:   "🎭",
         }[self]
 
@@ -135,6 +177,7 @@ class Role(Enum):
             Role.SHIFOKOR: "Aslan Akbey",
             Role.GUVOH:    "Abdülhey Çoban",
             Role.KAMIKAZE: "Memati Baş",
+            Role.CAKIR:    "Süleyman Çakır",
             Role.SUICID:   "Hain",
         }[self]
 
@@ -160,6 +203,7 @@ class Role(Enum):
             Role.SHIFOKOR: "Aslan Akbey olarak her gece bir oyuncuyu korursun. Hedef aldığın oyuncuyu gece saldırısından kurtarabilirsin.",
             Role.GUVOH:    "Abdülhey Çoban olarak her gece bir oyuncuyu takip eder, gece yaptığı hareket hakkında bilgi edinirsin.",
             Role.KAMIKAZE: "Memati Baş olarak gündüz oylamasıyla elenirsen yanında rastgele bir oyuncuyu da götürürsün.",
+            Role.CAKIR:    "Süleyman Çakır olarak halk takımındasın. Özel gece yeteneğin yok; Konsey'i bulup oylamada ele.",
             Role.SUICID:   "Hain olarak gündüz oylamasıyla elenirsen kendi zaferini kazanırsın.",
         }[self]
 
@@ -167,7 +211,7 @@ class Role(Enum):
 ROLE_POWER = {
     Role.DON: 100, Role.KOMISSAR: 90, Role.SHIFOKOR: 80,
     Role.GUVOH: 70, Role.KAMIKAZE: 60, Role.MAFIA: 50,
-    Role.SUICID: 40, Role.FUQARO: 10,
+    Role.SUICID: 40, Role.CAKIR: 15, Role.FUQARO: 10,
 }
 
 
@@ -219,23 +263,23 @@ def build_role_list(n: int) -> list[Role]:
         raise ValueError("Kamida 4 o'yinchi kerak")
 
     if n == 4:
-        return [Role.DON, Role.KOMISSAR, Role.FUQARO, Role.FUQARO]
+        return [Role.DON, Role.KOMISSAR, Role.CAKIR, Role.FUQARO]
     elif n == 5:
-        return [Role.DON, Role.MAFIA, Role.KOMISSAR, Role.FUQARO, Role.FUQARO]
+        return [Role.DON, Role.MAFIA, Role.KOMISSAR, Role.CAKIR, Role.FUQARO]
     elif n == 6:
-        return [Role.DON, Role.MAFIA, Role.KOMISSAR, Role.SHIFOKOR, Role.FUQARO, Role.FUQARO]
+        return [Role.DON, Role.MAFIA, Role.KOMISSAR, Role.SHIFOKOR, Role.CAKIR, Role.FUQARO]
     elif n == 7:
-        return [Role.DON, Role.MAFIA, Role.KOMISSAR, Role.SHIFOKOR, Role.GUVOH, Role.FUQARO, Role.FUQARO]
+        return [Role.DON, Role.MAFIA, Role.KOMISSAR, Role.SHIFOKOR, Role.GUVOH, Role.CAKIR, Role.FUQARO]
     elif n == 8:
-        return [Role.DON, Role.MAFIA, Role.KOMISSAR, Role.SHIFOKOR, Role.GUVOH, Role.KAMIKAZE, Role.FUQARO, Role.FUQARO]
+        return [Role.DON, Role.MAFIA, Role.KOMISSAR, Role.SHIFOKOR, Role.GUVOH, Role.KAMIKAZE, Role.CAKIR, Role.FUQARO]
     elif n == 9:
-        return [Role.DON, Role.MAFIA, Role.MAFIA, Role.KOMISSAR, Role.SHIFOKOR, Role.GUVOH, Role.KAMIKAZE, Role.FUQARO, Role.FUQARO]
+        return [Role.DON, Role.MAFIA, Role.MAFIA, Role.KOMISSAR, Role.SHIFOKOR, Role.GUVOH, Role.KAMIKAZE, Role.CAKIR, Role.FUQARO]
     elif n == 10:
-        return [Role.DON, Role.MAFIA, Role.MAFIA, Role.KOMISSAR, Role.SHIFOKOR, Role.GUVOH, Role.KAMIKAZE, Role.SUICID, Role.FUQARO, Role.FUQARO]
+        return [Role.DON, Role.MAFIA, Role.MAFIA, Role.KOMISSAR, Role.SHIFOKOR, Role.GUVOH, Role.KAMIKAZE, Role.SUICID, Role.CAKIR, Role.FUQARO]
     else:
         mafia_n = max(2, n // 4)
         roles = [Role.DON] + [Role.MAFIA] * mafia_n
-        roles += [Role.KOMISSAR, Role.SHIFOKOR, Role.GUVOH, Role.KAMIKAZE, Role.SUICID]
+        roles += [Role.KOMISSAR, Role.SHIFOKOR, Role.GUVOH, Role.KAMIKAZE, Role.SUICID, Role.CAKIR]
         roles += [Role.FUQARO] * (n - len(roles))
         return roles
 
@@ -908,7 +952,7 @@ class Game:
             death_caption = death_text
             if self.lang == "tr":
                 death_caption += "\n\n" + random.choice(quips)
-            image = random.choice(DEATH_SCENE_IMAGES) if DEATH_SCENE_IMAGES else ROLE_IMAGES.get(p.role.value)
+            image = death_image_for(p.role, "night")
             sent = False
             if self.app is not None and image:
                 try:
@@ -1063,11 +1107,20 @@ class Game:
         # Suicid: wins immediately
         if p.role == Role.SUICID:
             p.is_alive = False
-            await self.send(
-                self.chat_id,
+            traitor_msg = (
                 get_text(self.lang, "vote_results") + "\n" + "\n".join(tally_lines) +
                 "\n\n" + get_text(self.lang, "traitor_eliminated", name=p.name)
             )
+            await self.send(self.chat_id, traitor_msg)
+            if self.app is not None:
+                try:
+                    await self.app.bot.send_photo(
+                        chat_id=self.chat_id, photo=death_image_for(p.role, "vote"),
+                        caption=f"⚖️ <b>Oylama kararı: {p.name}</b>\n🎭 Rol: {get_role_text(self.lang, p.role.value)[0]}",
+                        parse_mode=ParseMode.HTML
+                    )
+                except TelegramError as exc:
+                    log.warning("Oylama ölüm görseli gönderilemedi: %s", exc)
             await self._end_game("suicid", winner_id=condemned)
             return
 
@@ -1115,6 +1168,21 @@ class Game:
             msg += "\n\n" + get_text(self.lang, "kamikaze_hit", victim=victim.name)
 
         await self.send(self.chat_id, msg)
+        if self.app is not None:
+            eliminated_players = [p]
+            if kamikaze_extra and self.players.get(kamikaze_extra):
+                eliminated_players.append(self.players[kamikaze_extra])
+            for eliminated in eliminated_players:
+                try:
+                    await self.app.bot.send_photo(
+                        chat_id=self.chat_id,
+                        photo=death_image_for(eliminated.role, "vote" if eliminated is p else "night"),
+                        caption=(f"⚰️ <b>{eliminated.name}</b> oyunun dışında kaldı.\n"
+                                 f"🎭 {get_role_text(self.lang, eliminated.role.value)[0]}"),
+                        parse_mode=ParseMode.HTML
+                    )
+                except TelegramError as exc:
+                    log.warning("Oylama ölüm görseli gönderilemedi: %s", exc)
         await self._maybe_continue()
 
     async def _maybe_continue(self) -> None:
@@ -1609,13 +1677,23 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         lang = await db.get_group_language(chat.id)
     else:
         lang = await db.get_language(update.effective_user.id)
+    help_text = get_text(lang, "help_message")
+    cakir_help = {
+        "tr": "🥃 Süleyman Çakır — Halk takımında, özel gece yeteneği yok.",
+        "en": "🥃 Suleyman Cakir — Town team; no special night ability.",
+        "ru": "🥃 Сулейман Чакыр — команда горожан; без ночной способности.",
+        "uz": "🥃 Süleyman Çakır — Xalq jamoasi; tungi qobiliyati yo‘q.",
+        "ar": "🥃 سليمان جاكير — ضمن فريق المواطنين؛ بلا قدرة ليلية خاصة.",
+        "de": "🥃 Süleyman Çakır — Bürgerteam; keine besondere Nachtfähigkeit.",
+    }
+    help_text += "\n\n" + cakir_help.get(lang, cakir_help["tr"])
     try:
         await update.effective_message.reply_photo(
-            photo=ROLE_IMAGES["mafia"], caption=get_text(lang, "help_message"),
+            photo=ROLE_IMAGES["mafia"], caption=help_text,
             parse_mode=ParseMode.HTML
         )
     except TelegramError:
-        await update.effective_message.reply_text(get_text(lang, "help_message"), parse_mode=ParseMode.HTML)
+        await update.effective_message.reply_text(help_text, parse_mode=ParseMode.HTML)
 
 
 async def cmd_newgame(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
