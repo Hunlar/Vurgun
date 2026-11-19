@@ -1,7 +1,7 @@
 """
-ULTRA MAFIA BOT
-===============
-Rollar: Fuqaro, Mafia, Don, Komissar, Shifokor, Guvoh, Kamikaze, Suicid
+KVP GAME
+========
+Kurtlar Vadisi temali gizli roller oyunu
 python-telegram-bot==21.6 | Python 3.10+
 """
 from __future__ import annotations
@@ -75,28 +75,30 @@ class Role(Enum):
 
     @property
     def emoji(self) -> str:
+        # Görsel kimlik KVP GAME'e uyarlandı; enum değerleri korunur.
         return {
-            Role.FUQARO:   "👨‍🌾",
+            Role.FUQARO:   "👥",
             Role.MAFIA:    "🔫",
-            Role.DON:      "🧠",
-            Role.KOMISSAR: "👮",
-            Role.SHIFOKOR: "💉",
-            Role.GUVOH:    "👁",
+            Role.DON:      "👑",
+            Role.KOMISSAR: "🕶️",
+            Role.SHIFOKOR: "🛡️",
+            Role.GUVOH:    "👁️",
             Role.KAMIKAZE: "💣",
-            Role.SUICID:   "☠️",
+            Role.SUICID:   "🎭",
         }[self]
 
     @property
     def uz_name(self) -> str:
+        # Rol adları değiştirilirken oyun motorunun beklediği enum sabitleri korunur.
         return {
-            Role.FUQARO:   "Fuqaro",
-            Role.MAFIA:    "Mafia",
-            Role.DON:      "Don",
-            Role.KOMISSAR: "Komissar",
-            Role.SHIFOKOR: "Shifokor",
-            Role.GUVOH:    "Guvoh",
-            Role.KAMIKAZE: "Kamikaze",
-            Role.SUICID:   "Suicid",
+            Role.FUQARO:   "Halk",
+            Role.MAFIA:    "Konsey Üyesi",
+            Role.DON:      "Baron Mehmet Karahanlı",
+            Role.KOMISSAR: "Polat Alemdar",
+            Role.SHIFOKOR: "Aslan Akbey",
+            Role.GUVOH:    "Abdülhey Çoban",
+            Role.KAMIKAZE: "Memati Baş",
+            Role.SUICID:   "Hain",
         }[self]
 
     @property
@@ -112,15 +114,16 @@ class Role(Enum):
 
     @property
     def description(self) -> str:
+        # Açıklamalar mevcut rol yeteneklerini aynen korur.
         return {
-            Role.FUQARO:   "Maxsus qobiliyat yo'q. Mafiyani toping va ovoz bering!",
-            Role.MAFIA:    "Har kecha Don bilan birga bitta o'yinchini o'ldiring.",
-            Role.DON:      "Mafiya rahbari. Har kecha o'ldirish nishonini tanlaysiz. Komissar tekshiruviga immunsiz.",
-            Role.KOMISSAR: "Har kecha bitta o'yinchini tekshirasiz. Mafiya yoki Don ekanini bilib olasiz.",
-            Role.SHIFOKOR: "Har kecha bitta o'yinchini davolaysiz. O'ldirishdan himoya qilasiz.",
-            Role.GUVOH:    "Har kecha bitta o'yinchini kuzatasiz. Uning kechagi harakatini bilasiz.",
-            Role.KAMIKAZE: "Ovoz bilan osilganda — o'zi bilan birga tasodifiy bitta o'yinchini o'ldiradi!",
-            Role.SUICID:   "Ovoz bilan osilganda — o'sha zahoti O'ZI yutadi!",
+            Role.FUQARO:   "Özel bir yeteneğin yok. Konsey üyelerini bul ve gündüz oylamasında saf dışı bırak.",
+            Role.MAFIA:    "Konsey üyesisin. Her gece Baron ile birlikte bir oyuncuyu hedef alırsın.",
+            Role.DON:      "Konseyin liderisin. Her gece öldürme hedefini seçersin. Polat'ın sıradan rol kontrolünde kimliğin gizli kalır.",
+            Role.KOMISSAR: "Polat Alemdar olarak her gece bir oyuncuyu soruşturursun. Konsey üyesi veya Baron olup olmadığını öğrenirsin.",
+            Role.SHIFOKOR: "Aslan Akbey olarak her gece bir oyuncuyu korursun. Hedef aldığın oyuncuyu gece saldırısından kurtarabilirsin.",
+            Role.GUVOH:    "Abdülhey Çoban olarak her gece bir oyuncuyu takip eder, gece yaptığı hareket hakkında bilgi edinirsin.",
+            Role.KAMIKAZE: "Memati Baş olarak gündüz oylamasıyla elenirsen yanında rastgele bir oyuncuyu da götürürsün.",
+            Role.SUICID:   "Hain olarak gündüz oylamasıyla elenirsen kendi zaferini kazanırsın.",
         }[self]
 
 
@@ -1142,7 +1145,7 @@ def main_kb() -> InlineKeyboardMarkup:
 # ══════════════════════════════════════════════════════════════════
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "🎭 <b>ULTRA MAFIA BOT</b> ga xush kelibsiz!\n\n"
+        "🎭 <b>KVP GAME</b> ga xush kelibsiz!\n\n"
         "Rollar: 👨‍🌾 Fuqaro • 🔫 Mafia • 🧠 Don\n"
         "👮 Komissar • 💉 Shifokor • 👁 Guvoh\n"
         "💣 Kamikaze • ☠️ Suicid\n\n"
@@ -1629,7 +1632,7 @@ async def post_init(app: Application) -> None:
                 log.info("Tozalandi: %d o'yin", n)
 
     asyncio.create_task(_cleanup())
-    log.info("🎭 ULTRA MAFIA BOT tayyor!")
+    log.info("🎭 KVP GAME tayyor!")
 
 
 async def post_shutdown(app: Application) -> None:
