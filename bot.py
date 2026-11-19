@@ -61,6 +61,15 @@ EXTEND_SECS      = 30
 # CHANNEL_JOIN_URL: foydalanuvchi kanalga kirishi uchun https://t.me/... havolasi.
 REQUIRED_CHANNEL = os.environ.get("REQUIRED_CHANNEL", "").strip()
 CHANNEL_JOIN_URL = os.environ.get("CHANNEL_JOIN_URL", "").strip()
+# Bot sahibi Telegram ID'leri: Heroku Config Vars > OWNER_IDS.
+OWNER_IDS = {
+    int(value.strip())
+    for value in os.environ.get("OWNER_IDS", os.environ.get("ADMIN_IDS", "")).split(",")
+    if value.strip().lstrip("-").isdigit()
+}
+
+SUPPORT_URL = os.environ.get("SUPPORT_URL", "").strip()
+
 
 AI_NAMES = [
     "🤖 Alice", "🤖 Bob", "🤖 Carlos", "🤖 Diana",
@@ -79,6 +88,14 @@ ROLE_IMAGES = {
     "kamikaze": "https://i1.sndcdn.com/artworks-000069787979-c3vbuc-t1080x1080.jpg",
     "suicid": "https://cdn.karar.com/news/1389096.jpg",
 }
+
+# Kurtlar Vadisi'nden ölüm/cenaze atmosferli sahne görselleri.
+# Kaynaklar IMAGE_SOURCES.md içinde listelenmiştir.
+DEATH_SCENE_IMAGES = [
+    "https://img.memurlar.net/galeri/3980/d801bd9a-8f47-e311-a39c-14feb5cc1801.jpg?width=800",
+    "https://iv.okcdn.ru/i?fn=external_8&r=BEH7dJIjJJO0pjyIf46vcZ9AfED7ECzB4qghX2xk2M0qvfFUHBkc-axEloUKxdMNjrS5CqdNleAEysdLnA60zUgQ",
+    "https://image.kanald.com.tr/i/kanald/100/1200x0/56b44c756ce43628c0a1b2f2.jpg",
+]
 
 # ══════════════════════════════════════════════════════════════════
 # ENUMS & MODELS
@@ -543,6 +560,25 @@ class DB:
             row = await c.fetchone()
         return dict(row) if row else {}
 
+    async def get_owner_stats(self) -> dict:
+        async with self._db.execute(
+            """SELECT COUNT(*) AS total_games,
+                      COUNT(DISTINCT chat_id) AS total_groups,
+                      SUM(CASE WHEN winner IS NOT NULL THEN 1 ELSE 0 END) AS completed_games,
+                      SUM(CASE WHEN julianday(started_at) >= julianday('now','-1 day') THEN 1 ELSE 0 END) AS games_24h
+               FROM games"""
+        ) as cur:
+            result = dict(await cur.fetchone())
+        async with self._db.execute("SELECT COUNT(*) AS total_users FROM player_stats") as cur:
+            result.update(dict(await cur.fetchone()))
+        live_games = [game for game in reg._g.values() if game.phase != Phase.ENDED]
+        result["running_games"] = len(live_games)
+        result["active_players"] = len({
+            uid for game in live_games for uid, player in game.players.items()
+            if uid > 0 and player.is_alive
+        })
+        return result
+
     def _get_achievements(self, stats: dict) -> list[str]:
         earned = []
         if stats["wins"] >= 1:           earned.append("first_win")
@@ -852,17 +888,39 @@ class Game:
 
         if not res.killed:
             lines.append(get_text(self.lang, "nobody_died"))
-        else:
-            for uid in res.killed:
-                p = self.players[uid]
-                role_name, _ = get_role_text(self.lang, p.role.value)
-                lines.append(
-                    get_text(self.lang, "player_killed", name=p.name,
-                             emoji=p.role.emoji, role=role_name)
-                )
-
         lines.extend(res.messages)
         await self.send(self.chat_id, "\n".join(lines))
+
+        # KVP ölüm sahnesi: elenen her oyuncu grup içinde rol görseliyle duyurulur.
+        for uid in res.killed:
+            p = self.players[uid]
+            role_name, _ = get_role_text(self.lang, p.role.value)
+            death_text = get_text(
+                self.lang, "player_killed", name=p.name,
+                emoji=p.role.emoji, role=role_name
+            )
+            quips = [
+                "Bu gece dosya kapandı... Mekân yine Polat'a kaldı. 🕶️",
+                "Son sözü söyleyemedi; sahneden erken ayrıldı. 🎬",
+                "Konsey kararını verdi. İtiraz makamı da kapalı. ⚰️",
+                "Kurtlar sofrasında bu gece bir sandalye eksildi. 🐺",
+            ]
+            death_caption = death_text
+            if self.lang == "tr":
+                death_caption += "\n\n" + random.choice(quips)
+            image = random.choice(DEATH_SCENE_IMAGES) if DEATH_SCENE_IMAGES else ROLE_IMAGES.get(p.role.value)
+            sent = False
+            if self.app is not None and image:
+                try:
+                    await self.app.bot.send_photo(
+                        chat_id=self.chat_id, photo=image,
+                        caption=death_caption, parse_mode=ParseMode.HTML
+                    )
+                    sent = True
+                except TelegramError as exc:
+                    log.warning("Ölüm sahnesi görseli gönderilemedi: %s", exc)
+            if not sent:
+                await self.send(self.chat_id, death_caption)
 
         # Private: komissar results
         for k_uid, p in self.players.items():
@@ -1085,20 +1143,26 @@ class Game:
             f"<b>{get_text(self.lang, 'final_roles')}</b>\n{reveal}\n\n"
             f"📊 {get_text(self.lang, 'rounds_played', rounds=self.round)}"
         )
+        # Önce metin finalini gönder; görsel/caption hatası sonucu gizleyemez.
+        await self.send(self.chat_id, end_caption)
+
         if self.app is not None:
             image_role = next((p.role for p in self.players.values()
                                if p.user_id == winner_id), None)
             if image_role is None:
-                image_role = Role.DON if winner == 'mafia' else (Role.KOMISSAR if winner == 'town' else Role.SUICID)
-            try:
-                await self.app.bot.send_photo(
-                    chat_id=self.chat_id, photo=ROLE_IMAGES.get(image_role.value),
-                    caption=end_caption, parse_mode=ParseMode.HTML
+                image_role = Role.DON if winner == "mafia" else (
+                    Role.KOMISSAR if winner == "town" else Role.SUICID
                 )
-            except TelegramError:
-                await self.send(self.chat_id, end_caption)
-        else:
-            await self.send(self.chat_id, end_caption)
+            image = ROLE_IMAGES.get(image_role.value)
+            if image:
+                try:
+                    await self.app.bot.send_photo(
+                        chat_id=self.chat_id, photo=image,
+                        caption=f"🎬 <b>KVP GAME — FİNAL SAHNESİ</b> · {get_text(self.lang, 'winner_' + winner)}",
+                        parse_mode=ParseMode.HTML
+                    )
+                except TelegramError as exc:
+                    log.warning("Final görseli gönderilemedi; metin sonucu yayınlandı: %s", exc)
 
         # Persist
         await db.end_game(self.game_id, winner, self.round)
@@ -1493,6 +1557,50 @@ async def cmd_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+def owner_panel_kb() -> InlineKeyboardMarkup:
+    support_button = (
+        InlineKeyboardButton("🛟 Destek / İletişim", url=SUPPORT_URL)
+        if SUPPORT_URL else
+        InlineKeyboardButton("🛟 Destek / İletişim", callback_data="owner:support")
+    )
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 İstatistikleri yenile", callback_data="owner:refresh")],
+        [support_button],
+    ])
+
+
+async def render_owner_panel() -> str:
+    stats = await db.get_owner_stats()
+    return (
+        "👑 <b>KVP GAME — SAHİP PANELİ</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"👥 Kayıtlı kullanıcı: <b>{stats.get('total_users') or 0}</b>\n"
+        f"🏘️ Kayıtlı grup: <b>{stats.get('total_groups') or 0}</b>\n"
+        f"🎮 Toplam oyun kaydı: <b>{stats.get('total_games') or 0}</b>\n"
+        f"🏁 Tamamlanan oyun: <b>{stats.get('completed_games') or 0}</b>\n"
+        f"🔥 Son 24 saatte başlayan oyun: <b>{stats.get('games_24h') or 0}</b>\n"
+        f"🟢 Şu an çalışan oyun: <b>{stats.get('running_games') or 0}</b>\n"
+        f"🎯 Şu an oyundaki aktif oyuncu: <b>{stats.get('active_players') or 0}</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "<i>Kayıtlı grup sayısı, en az bir oyun kaydı bulunan grupları gösterir. "
+        "Aktif kullanıcı sayısı için ayrıca son görülme takibi gerekir.</i>"
+    )
+
+
+async def cmd_panel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if not user or user.id not in OWNER_IDS:
+        await update.effective_message.reply_text("⛔ Bu panel yalnızca bot sahibine açıktır.")
+        return
+    if update.effective_chat.type != "private":
+        await update.effective_message.reply_text("🔐 Güvenlik için /panel komutunu botun özel mesajında kullan.")
+        return
+    await update.effective_message.reply_text(
+        await render_owner_panel(), parse_mode=ParseMode.HTML,
+        reply_markup=owner_panel_kb()
+    )
+
+
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not await require_channel_membership(update, ctx):
         return
@@ -1527,10 +1635,21 @@ async def cmd_newgame(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     g = reg.new(chat_id, send_fn, group_lang, app=ctx.application)
     g.join(user.id, user.full_name)
 
-    msg = await update.message.reply_text(
-        get_text(g.lang, "lobby_created", name=user.full_name, maximum=MAX_PLAYERS, seconds=LOBBY_TIMEOUT),
-        parse_mode=ParseMode.HTML, reply_markup=lobby_kb(1, is_host=True, lang=g.lang),
+    lobby_text = get_text(
+        g.lang, "lobby_created", name=user.full_name,
+        maximum=MAX_PLAYERS, seconds=LOBBY_TIMEOUT
     )
+    try:
+        msg = await update.message.reply_photo(
+            photo=ROLE_IMAGES["mafia"], caption=lobby_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=lobby_kb(1, is_host=True, lang=g.lang),
+        )
+    except TelegramError:
+        msg = await update.message.reply_text(
+            lobby_text, parse_mode=ParseMode.HTML,
+            reply_markup=lobby_kb(1, is_host=True, lang=g.lang),
+        )
 
     # Start lobby countdown
     asyncio.create_task(g.start_lobby_timer())
@@ -1630,7 +1749,14 @@ async def cmd_players(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         ai = " 🤖" if p.is_ai else ""
         lines.append(f"  {icon} {p.name}{ai}")
     lines.append("\n⏱ " + get_text(g.lang, "round_label", round=g.round))
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+    players_text = "\n".join(lines)
+    try:
+        await update.message.reply_photo(
+            photo=ROLE_IMAGES["komissar"], caption=players_text,
+            parse_mode=ParseMode.HTML
+        )
+    except TelegramError:
+        await update.message.reply_text(players_text, parse_mode=ParseMode.HTML)
 
 
 async def cmd_myrole(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1690,6 +1816,21 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if data == "channel_link_missing":
         lang = await db.get_language(uid)
         await q.answer(get_text(lang, "channel_url_missing"), show_alert=True)
+        return
+
+    if data.startswith("owner:"):
+        if uid not in OWNER_IDS or q.message is None or q.message.chat.type != "private":
+            await q.answer("⛔ Yetkin yok.", show_alert=True)
+            return
+        action = data.split(":", 1)[1]
+        if action == "refresh":
+            await q.edit_message_text(
+                await render_owner_panel(), parse_mode=ParseMode.HTML,
+                reply_markup=owner_panel_kb()
+            )
+            await q.answer("İstatistikler yenilendi.")
+        elif action == "support":
+            await q.answer("Destek iletişim bilgisi henüz yapılandırılmadı.", show_alert=True)
         return
 
     # Group language selection is restricted to group administrators.
@@ -2023,6 +2164,7 @@ async def post_init(app: Application) -> None:
         BotCommand("language", "Kişisel dili değiştir"),
         BotCommand("grouplanguage", "Grup dilini değiştir (yönetici)"),
         BotCommand("admin", "Yönetici komutları"),
+        BotCommand("panel", "Bot sahibi yönetim paneli"),
     ]
     await app.bot.set_my_commands(tr_commands)
     await app.bot.set_my_commands(tr_commands, language_code="tr")
@@ -2073,6 +2215,7 @@ def main() -> None:
     app.add_handler(CommandHandler("language",  cmd_language))
     app.add_handler(CommandHandler("grouplanguage", cmd_grouplanguage))
     app.add_handler(CommandHandler("admin", cmd_admin))
+    app.add_handler(CommandHandler("panel", cmd_panel))
     app.add_handler(CommandHandler("help",      cmd_help))
     app.add_handler(CommandHandler("newgame",   cmd_newgame))
     app.add_handler(CommandHandler("join",      cmd_join))
