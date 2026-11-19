@@ -15,3 +15,16 @@ Bot, rol kartlarında ve açılış/oyun sonu mesajlarında aşağıdaki web gö
 ## Kullanım notu
 
 Bunlar üçüncü taraf web sayfalarındaki dizi/oyuncu görselleridir; görselin internette bulunması yeniden dağıtım izni verildiği anlamına gelmez. Botu herkese açık veya ticari amaçla yayımlamadan önce hak sahibinden izin alınmalı ya da kullanım izni açıkça belirtilmiş görsellerle değiştirilmelidir. Kurtlar Vadisi ve karakter adları ilgili hak sahiplerine aittir.
+
+
+## Ölüm / cenaze sahneleri
+
+Gece öldürülme duyurularında aşağıdaki Kurtlar Vadisi sahne görsellerinden biri rastgele kullanılır:
+
+| Kullanım | Görsel kaynağı |
+|---|---|
+| Cenaze / taziye sahnesi | https://img.memurlar.net/galeri/3980/d801bd9a-8f47-e311-a39c-14feb5cc1801.jpg?width=800 |
+| Aslan Akbey ölüm sahnesi | https://iv.okcdn.ru/i?fn=external_8&r=BEH7dJIjJJO0pjyIf46vcZ9AfED7ECzB4qghX2xk2M0qvfFUHBkc-axEloUKxdMNjrS5CqdNleAEysdLnA60zUgQ |
+| Polat'ın kritik sahnesi | https://image.kanald.com.tr/i/kanald/100/1200x0/56b44c756ce43628c0a1b2f2.jpg |
+
+Bu görseller üçüncü taraf kaynaklardan alınır; URL'lerin kalıcı veya yeniden kullanım için lisanslı olduğu garanti edilmez. Erişim başarısız olursa bot mizahi/metinsel ölüm duyurusuna geri döner. Ticari veya herkese açık dağıtım öncesinde hak sahipliği ve kullanım izni kontrol edilmelidir.
