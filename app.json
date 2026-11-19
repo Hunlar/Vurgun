@@ -1,0 +1,42 @@
+
+{
+  "name": "KVP GAME",
+  "description": "Telegram Kurtlar Vadisi temali gizli roller oyunu",
+  "repository": "https://github.com/Hunlar/Vurgun",
+  "keywords": [
+    "telegram",
+    "bot",
+    "mafia",
+    "game"
+  ],
+  "stack": "heroku-24",
+  "buildpacks": [
+    {
+      "url": "heroku/python"
+    }
+  ],
+  "env": {
+    "BOT_TOKEN": {
+      "description": "BotFather Telegram bot tokeni",
+      "required": true
+    },
+    "REQUIRED_CHANNEL": {
+      "description": "Zorunlu Telegram kanali",
+      "required": false
+    },
+    "CHANNEL_JOIN_URL": {
+      "description": "Kanal katilim baglantisi",
+      "required": false
+    },
+    "DB_PATH": {
+      "description": "SQLite veritabani yolu",
+      "value": "mafia.db",
+      "required": false
+    }
+  },
+  "formation": {
+    "worker": {
+      "quantity": 1
+    }
+  }
+    }
