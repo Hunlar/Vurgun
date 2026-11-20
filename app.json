@@ -7,7 +7,8 @@
     "telegram",
     "bot",
     "mafia",
-    "game"
+    "game",
+    "kurtlar-vadisi"
   ],
   "stack": "heroku-24",
   "buildpacks": [
@@ -20,12 +21,22 @@
       "description": "BotFather Telegram bot tokeni",
       "required": true
     },
+    "OWNER_IDS": {
+      "description": "Bot sahibi ve yonetici Telegram ID'leri. Birden fazla ID virgulle ayrilir.",
+      "required": false
+    },
     "REQUIRED_CHANNEL": {
       "description": "Zorunlu Telegram kanali",
+      "value": "@sancakmain",
       "required": false
     },
     "CHANNEL_JOIN_URL": {
       "description": "Kanal katilim baglantisi",
+      "value": "https://t.me/sancakmain",
+      "required": false
+    },
+    "SUPPORT_URL": {
+      "description": "Destek grubu veya destek kanali baglantisi",
       "required": false
     },
     "DB_PATH": {
@@ -39,4 +50,4 @@
       "quantity": 1
     }
   }
-    }
+}
