@@ -244,7 +244,7 @@ class Player:
     @property
     def tag(self) -> str:
         dead = "💀 " if not self.is_alive else ""
-        return f"{dead}{self.name}"
+        return f"{dead}{html.escape(self.name)}"
 
 
 @dataclass
@@ -335,6 +335,8 @@ class RoleEngine:
                 continue
 
             if p.role in (Role.MAFIA, Role.DON):
+                if players[t].role.is_mafia_team:
+                    continue
                 mafia_votes[t] = mafia_votes.get(t, 0) + 1
             elif p.role == Role.SHIFOKOR:
                 heal_target = t
@@ -347,9 +349,21 @@ class RoleEngine:
         if heal_target is not None:
             res.healed.append(heal_target)
 
-        # Mafia kill (majority)
-        if mafia_votes:
-            kill_target = max(mafia_votes, key=lambda k: mafia_votes[k])
+        # The living Baron's order takes priority. If the Baron did not choose
+        # a valid target, use the Council vote; a tie means no kill.
+        baron_targets = [
+            p.night_target for p in alive.values()
+            if p.role == Role.DON and p.night_target in alive
+            and not alive[p.night_target].role.is_mafia_team
+        ]
+        kill_target = baron_targets[0] if baron_targets else None
+        if kill_target is None and mafia_votes:
+            highest_votes = max(mafia_votes.values())
+            leaders = [uid for uid, votes in mafia_votes.items() if votes == highest_votes]
+            if len(leaders) == 1:
+                kill_target = leaders[0]
+
+        if kill_target is not None:
             if kill_target in res.healed:
                 res.messages.append(get_text(lang, "doctor_saved"))
             else:
@@ -370,17 +384,17 @@ class RoleEngine:
             if target_p.role.is_mafia_team:
                 if target_p.night_target and target_p.night_target in players:
                     victim_name = players[target_p.night_target].name
-                    info = get_text(lang, "witness_mafia", name=target_p.name, victim=victim_name)
+                    info = get_text(lang, "witness_mafia", name=html.escape(target_p.name), victim=html.escape(victim_name))
                 else:
-                    info = get_text(lang, "witness_no_target", name=target_p.name)
+                    info = get_text(lang, "witness_no_target", name=html.escape(target_p.name))
             elif target_p.role == Role.KOMISSAR and target_p.night_target:
                 tname = players.get(target_p.night_target, Player(-1,"?")).name
-                info = get_text(lang, "witness_check", name=target_p.name, target=tname)
+                info = get_text(lang, "witness_check", name=html.escape(target_p.name), target=html.escape(tname))
             elif target_p.role == Role.SHIFOKOR and target_p.night_target:
                 tname = players.get(target_p.night_target, Player(-1,"?")).name
-                info = get_text(lang, "witness_heal", name=target_p.name, target=tname)
+                info = get_text(lang, "witness_heal", name=html.escape(target_p.name), target=html.escape(tname))
             else:
-                info = get_text(lang, "witness_idle", name=target_p.name)
+                info = get_text(lang, "witness_idle", name=html.escape(target_p.name))
             res.witnessed[g_uid] = info
 
         return res
@@ -449,7 +463,8 @@ CREATE TABLE IF NOT EXISTS player_stats (
     elo          INTEGER DEFAULT 1000,
     streak       INTEGER DEFAULT 0,
     best_streak  INTEGER DEFAULT 0,
-    role_wins    TEXT DEFAULT '{}'
+    role_wins    TEXT DEFAULT '{}',
+    mafia_found  INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_elo ON player_stats(elo DESC);
 CREATE TABLE IF NOT EXISTS user_languages (
@@ -482,6 +497,13 @@ class DB:
         self._db = await aiosqlite.connect(DB_PATH)
         self._db.row_factory = aiosqlite.Row
         await self._db.executescript(SCHEMA)
+        # Existing Heroku/local databases need a safe additive migration.
+        async with self._db.execute("PRAGMA table_info(player_stats)") as cur:
+            columns = {row["name"] for row in await cur.fetchall()}
+        if "mafia_found" not in columns:
+            await self._db.execute(
+                "ALTER TABLE player_stats ADD COLUMN mafia_found INTEGER DEFAULT 0"
+            )
         await self._db.commit()
         log.info("DB ulandi: %s", DB_PATH)
 
@@ -554,6 +576,7 @@ class DB:
         expected = 1 / (1 + math.pow(10, (opponent_elo - old_elo) / 400))
         elo_change = round(32 * ((1.0 if won else 0.0) - expected))
         new_elo = max(100, old_elo + elo_change)
+        actual_elo_change = new_elo - old_elo
 
         new_streak = (row["streak"] + 1) if won else 0
         best_streak = max(row["best_streak"], new_streak)
@@ -572,7 +595,19 @@ class DB:
              json.dumps(rw), user_id)
         )
         await self._db.commit()
-        return elo_change
+        return actual_elo_change
+
+    async def add_investigation_success(self, user_id: int, username: str) -> None:
+        """Count a successful human Komissar check for the related achievement."""
+        await self._db.execute(
+            "INSERT OR IGNORE INTO player_stats(user_id, username) VALUES(?, ?)",
+            (user_id, username),
+        )
+        await self._db.execute(
+            "UPDATE player_stats SET username=?, mafia_found=mafia_found+1 WHERE user_id=?",
+            (username, user_id),
+        )
+        await self._db.commit()
 
     async def get_stats(self, user_id: int) -> Optional[dict]:
         async with self._db.execute(
@@ -599,7 +634,7 @@ class DB:
             """SELECT COUNT(*) as total,
                SUM(CASE WHEN winner='town'  THEN 1 ELSE 0 END) as town,
                SUM(CASE WHEN winner='mafia' THEN 1 ELSE 0 END) as mafia,
-               SUM(CASE WHEN winner='suicid'THEN 1 ELSE 0 END) as suicid,
+               SUM(CASE WHEN winner='suicid' THEN 1 ELSE 0 END) as suicid,
                AVG(player_count) as avg_p, AVG(rounds) as avg_r
                FROM games WHERE winner IS NOT NULL"""
         ) as c:
@@ -629,12 +664,13 @@ class DB:
         earned = []
         if stats["wins"] >= 1:           earned.append("first_win")
         if stats["games"] >= 10:         earned.append("veteran")
-        if stats["streak"] >= 3:         earned.append("streak3")
-        if stats["streak"] >= 5:         earned.append("streak5")
+        if stats.get("best_streak", stats["streak"]) >= 3: earned.append("streak3")
+        if stats.get("best_streak", stats["streak"]) >= 5: earned.append("streak5")
         if stats["survived"] >= 5:       earned.append("survivor")
         rw = stats["role_wins"]
         if rw.get("mafia",0)+rw.get("don",0) >= 5:   earned.append("mafia_boss")
         if rw.get("don",0) >= 3:         earned.append("don_master")
+        if stats.get("mafia_found", 0) >= 3: earned.append("komissar_pro")
         return earned
 
 
@@ -690,6 +726,9 @@ class Game:
         self._extends  = 0           # lobby extensions used
         self._lobby_remaining = LOBBY_TIMEOUT
         self._defense_id: Optional[int] = None
+        self._resolving_night = False
+        self._resolving_vote = False
+        self._executing_vote = False
 
     # ── Lobby ──────────────────────────────────────────────────────
     def join(self, uid: int, name: str) -> bool:
@@ -704,8 +743,8 @@ class Game:
         if uid not in self.players or self.phase != Phase.LOBBY:
             return False
         del self.players[uid]
-        if self.host_id == uid and self.players:
-            self.host_id = next(iter(self.players))
+        if self.host_id == uid:
+            self.host_id = next(iter(self.players), None)
         return True
 
     def add_ai(self) -> bool:
@@ -732,10 +771,13 @@ class Game:
     # ── Start lobby countdown ──────────────────────────────────────
     async def start_lobby_timer(self) -> None:
         """60s lobby timer with warnings at 30s and 10s."""
-        remaining = LOBBY_TIMEOUT
-        while remaining > 0:
+        self._lobby_remaining = LOBBY_TIMEOUT
+        while self._lobby_remaining > 0:
             await asyncio.sleep(1)
-            remaining -= 1
+            if self.phase != Phase.LOBBY:
+                return
+            self._lobby_remaining = max(0, self._lobby_remaining - 1)
+            remaining = self._lobby_remaining
             if remaining == 30:
                 await self.send(
                     self.chat_id,
@@ -746,7 +788,6 @@ class Game:
                     self.chat_id,
                     get_text(self.lang, "lobby_10", count=self.n())
                 )
-            self._lobby_remaining = remaining
 
         # Time's up — auto start or cancel
         if self.phase != Phase.LOBBY:
@@ -762,16 +803,10 @@ class Game:
             )
 
     async def extend_lobby(self, uid: int) -> str:
-        if uid != self.host_id:
-            try:
-                # check admin
-                pass
-            except Exception:
-                pass
+        if self.phase != Phase.LOBBY or self._lobby_remaining <= 0:
+            return get_text(self.lang, "lobby_not_active")
         if self._extends >= MAX_EXTEND:
             return get_text(self.lang, "extend_limit", maximum=MAX_EXTEND)
-        if self.phase != Phase.LOBBY:
-            return get_text(self.lang, "lobby_not_active")
         self._extends += 1
         self._lobby_remaining += EXTEND_SECS
         return get_text(self.lang, "lobby_extended", seconds=EXTEND_SECS, count=self._extends, maximum=MAX_EXTEND)
@@ -805,6 +840,8 @@ class Game:
         delivered_dm = []
         if self.app is not None:
             for player in self.players.values():
+                if self.phase != Phase.STARTING:
+                    return
                 if player.is_ai or player.user_id < 0:
                     continue
                 player_lang = await db.get_language(player.user_id)
@@ -835,24 +872,28 @@ class Game:
         await self._begin_night()
         # Night state is fully initialized before action buttons are sent, avoiding a race
         # where a fast player action could be reset by the night initializer.
-        if self.app is not None:
+        if self.app is not None and self.phase == Phase.NIGHT:
             for player_uid in delivered_dm:
+                if self.phase != Phase.NIGHT:
+                    break
                 player = self.players.get(player_uid)
                 if player and player.role.has_night_action and player.is_alive:
                     await send_night_dm(self.app, self, player_uid)
-            if missing_dm:
+            if missing_dm and self.phase == Phase.NIGHT:
                 try:
                     me = await self.app.bot.get_me()
                     start_link = f"https://t.me/{me.username}?start=play"
                     await self.send(
                         self.chat_id,
-                        get_text(self.lang, "dm_missing", names=', '.join(missing_dm), link=start_link)
+                        get_text(self.lang, "dm_missing", names=', '.join(html.escape(n) for n in missing_dm), link=start_link)
                     )
                 except TelegramError:
-                    log.exception("DM yetkazish ogohlantirishi yuborilmadi")
+                    log.exception("DM yetkazish ogohlantirishi yuborilmedi")
 
     # ── Night ─────────────────────────────────────────────────────
     async def _begin_night(self) -> None:
+        if self.phase == Phase.ENDED:
+            return
         self.phase = Phase.NIGHT
         self.round += 1
         for p in self.players.values():
@@ -862,23 +903,44 @@ class Game:
             self.chat_id,
             get_text(self.lang, "night_started", round=self.round, seconds=NIGHT_TIMEOUT)
         )
+        if self.phase != Phase.NIGHT:
+            return
 
         # AI actions
         await self._ai_night()
+        if self.phase != Phase.NIGHT:
+            return
 
         self._cancel()
-        self._task = asyncio.create_task(self._night_timeout())
+        if self._all_acted():
+            self._task = asyncio.create_task(self._resolve_night())
+        else:
+            self._task = asyncio.create_task(self._night_timeout())
 
     async def _ai_night(self) -> None:
         alive_others_ids = [uid for uid, p in self.players.items() if p.is_alive]
-        for uid, p in self.players.items():
-            if not p.is_alive or not p.is_ai or not p.role.has_night_action:
-                continue
+
+        async def choose_target(uid: int, player: Player) -> None:
             await asyncio.sleep(random.uniform(1, 3))
-            candidates = [i for i in alive_others_ids if i != uid]
+            candidates = [
+                target_id for target_id in alive_others_ids
+                if target_id != uid
+                and not (
+                    player.role.is_mafia_team
+                    and self.players[target_id].role.is_mafia_team
+                )
+            ]
             if candidates:
-                p.night_target = random.choice(candidates)
-                p.has_acted = True
+                player.night_target = random.choice(candidates)
+            player.has_acted = True
+
+        tasks = [
+            choose_target(uid, player)
+            for uid, player in self.players.items()
+            if player.is_alive and player.is_ai and player.role.has_night_action
+        ]
+        if tasks:
+            await asyncio.gather(*tasks)
 
     async def _night_timeout(self) -> None:
         await asyncio.sleep(NIGHT_TIMEOUT)
@@ -886,7 +948,7 @@ class Game:
 
     async def record_action(self, uid: int, target_id: int, lang: Optional[str] = None) -> str:
         display_lang = lang if lang in LANGUAGES else self.lang
-        if self.phase != Phase.NIGHT:
+        if self.phase != Phase.NIGHT or self._resolving_night:
             return get_text(display_lang, "phase_night")
         p = self.players.get(uid)
         if not p or not p.is_alive:
@@ -898,16 +960,18 @@ class Game:
             return get_text(display_lang, "invalid_target")
         if target_id == uid and p.role != Role.SHIFOKOR:
             return get_text(display_lang, "self_target")
+        if p.role.is_mafia_team and t.role.is_mafia_team:
+            return get_text(display_lang, "invalid_target")
         p.night_target = target_id
         p.has_acted = True
         if self._all_acted():
             self._cancel()
             asyncio.create_task(self._resolve_night())
-        return get_text(display_lang, "action_recorded", name=t.name)
+        return get_text(display_lang, "action_recorded", name=html.escape(t.name))
 
     async def skip_action(self, uid: int, lang: Optional[str] = None) -> str:
         display_lang = lang if lang in LANGUAGES else self.lang
-        if self.phase != Phase.NIGHT:
+        if self.phase != Phase.NIGHT or self._resolving_night:
             return get_text(display_lang, "phase_night")
         player = self.players.get(uid)
         if not player or not player.is_alive or not player.role.has_night_action:
@@ -926,8 +990,9 @@ class Game:
         return True
 
     async def _resolve_night(self) -> None:
-        if self.phase != Phase.NIGHT:
+        if self.phase != Phase.NIGHT or self._resolving_night:
             return
+        self._resolving_night = True
 
         res = RoleEngine.resolve_night(self.players, self.lang)
         lines = [get_text(self.lang, "dawn") + "\n"]
@@ -942,7 +1007,7 @@ class Game:
             p = self.players[uid]
             role_name, _ = get_role_text(self.lang, p.role.value)
             death_text = get_text(
-                self.lang, "player_killed", name=p.name,
+                self.lang, "player_killed", name=html.escape(p.name),
                 emoji=p.role.emoji, role=role_name
             )
             quips = [
@@ -968,20 +1033,38 @@ class Game:
             if not sent:
                 await self.send(self.chat_id, death_caption)
 
-        # Private: komissar results
+        if self.phase != Phase.NIGHT:
+            return
+
+        # Private: komissar results. AI oyuncuların Telegram hesabı yoktur;
+        # negatif dahili ID'lere DM göndermeye çalışma.
         for k_uid, p in self.players.items():
-            if p.role == Role.KOMISSAR and p.is_alive and p.night_target in res.checked:
+            if (
+                not p.is_ai and k_uid > 0
+                and p.role == Role.KOMISSAR and p.is_alive
+                and p.night_target in res.checked
+            ):
                 is_m = res.checked[p.night_target]
                 t_name = self.players[p.night_target].name
                 player_lang = await db.get_language(k_uid)
                 result_text = get_text(player_lang, "mafia_result" if is_m else "town_result")
-                await self.send(k_uid, get_text(player_lang, "check_result", name=t_name, result=result_text))
+                if is_m:
+                    try:
+                        await db.add_investigation_success(k_uid, p.name)
+                    except Exception:
+                        log.exception("Komissar başarım sayacı güncellenemedi: %s", k_uid)
+                await self.send(k_uid, get_text(player_lang, "check_result", name=html.escape(t_name), result=result_text))
 
-        # Private: guvoh results
+        # Private: guvoh results. AI için özel mesaj gönderilmez.
         for g_uid, info in res.witnessed.items():
+            player = self.players.get(g_uid)
+            if not player or player.is_ai or not player.is_alive or g_uid <= 0:
+                continue
             player_lang = await db.get_language(g_uid)
             await self.send(g_uid, get_text(player_lang, "witness_result", info=info))
 
+        if self.phase != Phase.NIGHT:
+            return
         winner = RoleEngine.check_win(self.players)
         if winner:
             winner_id = RoleEngine.last_standing_winner_id(self.players)
@@ -991,6 +1074,9 @@ class Game:
 
     # ── Day ───────────────────────────────────────────────────────
     async def _begin_day(self) -> None:
+        if self.phase == Phase.ENDED:
+            return
+        self._resolving_night = False
         self.phase = Phase.DAY
 
         alive_list = "\n".join(
@@ -1001,6 +1087,8 @@ class Game:
             get_text(self.lang, "day_started", round=self.round, count=len(self.alive()),
                      players=alive_list, seconds=DAY_TIMEOUT)
         )
+        if self.phase != Phase.DAY:
+            return
 
         self._cancel()
         self._task = asyncio.create_task(self._day_timeout())
@@ -1020,18 +1108,16 @@ class Game:
 
     # ── Voting ────────────────────────────────────────────────────
     async def _begin_voting(self) -> None:
+        if self.phase != Phase.DAY:
+            return
         self.phase = Phase.VOTING
         self.votes.reset()
 
         alive = self.alive()
-        targets = [(p.user_id, f"{p.role.emoji if False else ''} {p.name}") for p in alive]
-
-        # Simple display without role emoji (roles hidden)
-        targets_clean = [(p.user_id, p.name) for p in alive]
-
+        # Simple display without role emoji (roles hidden).
         buttons = [
-            [InlineKeyboardButton(f"🗳 {name}", callback_data=f"vote:{uid}")]
-            for uid, name in targets_clean
+            [InlineKeyboardButton(f"🗳 {player.name[:55]}", callback_data=f"vote:{player.user_id}")]
+            for player in alive
         ]
         buttons.append([InlineKeyboardButton(get_text(self.lang, "vote_skip"), callback_data="vote:skip")])
 
@@ -1040,21 +1126,40 @@ class Game:
             get_text(self.lang, "voting_started", seconds=VOTE_TIMEOUT),
             markup=InlineKeyboardMarkup(buttons)
         )
+        if self.phase != Phase.VOTING:
+            return
 
-        # AI votes
-        for uid, p in self.players.items():
-            if p.is_alive and p.is_ai:
-                await asyncio.sleep(random.uniform(1, 3))
-                candidates = [i for i in [q.user_id for q in self.alive()] if i != uid]
-                if candidates:
-                    self.votes.cast(uid, random.choice(candidates))
+        # AI votes are collected concurrently so six AI players do not add up
+        # to 6-18 seconds of serial waiting before the human vote timer starts.
+        async def choose_vote(uid: int):
+            await asyncio.sleep(random.uniform(1, 3))
+            voter = self.players[uid]
+            candidates = [player for player in self.alive() if player.user_id != uid]
+            if voter.role.is_mafia_team:
+                opponents = [player for player in candidates if not player.role.is_mafia_team]
+            else:
+                opponents = [player for player in candidates if player.role.is_mafia_team]
+            if opponents:
+                candidates = opponents
+            return (uid, random.choice(candidates).user_id) if candidates else None
+
+        ai_vote_tasks = [
+            choose_vote(uid) for uid, player in self.players.items()
+            if player.is_alive and player.is_ai
+        ]
+        if ai_vote_tasks:
+            for choice in await asyncio.gather(*ai_vote_tasks):
+                if choice is not None:
+                    self.votes.cast(*choice)
+        if self.phase != Phase.VOTING:
+            return
 
         self._cancel()
         self._task = asyncio.create_task(self._vote_timeout())
 
     def cast_vote(self, voter: int, target: int, lang: Optional[str] = None) -> str:
         display_lang = lang if lang in LANGUAGES else self.lang
-        if self.phase != Phase.VOTING:
+        if self.phase != Phase.VOTING or self._resolving_vote:
             return get_text(display_lang, "not_voting")
         vp = self.players.get(voter)
         tp = self.players.get(target)
@@ -1067,26 +1172,28 @@ class Game:
         prev = self.votes.prev(voter)
         self.votes.cast(voter, target)
         if prev and prev != target and prev in self.players:
-            return get_text(display_lang, "vote_changed", name=tp.name)
-        return get_text(display_lang, "vote_cast", name=tp.name)
+            return get_text(display_lang, "vote_changed", name=html.escape(tp.name))
+        return get_text(display_lang, "vote_cast", name=html.escape(tp.name))
 
     async def _vote_timeout(self) -> None:
         await asyncio.sleep(VOTE_TIMEOUT)
         await self._resolve_vote()
 
     async def _resolve_vote(self) -> None:
-        if self.phase != Phase.VOTING:
+        if self.phase != Phase.VOTING or self._resolving_vote:
             return
+        self._resolving_vote = True
 
         tally = self.votes.tally()
         if not tally:
             await self.send(self.chat_id, get_text(self.lang, "no_votes"))
-            await self._maybe_continue()
+            if self.phase == Phase.VOTING:
+                await self._maybe_continue()
             return
 
         # Show results
         tally_lines = [
-            get_text(self.lang, "vote_line", name=self.players[uid].name, count=v)
+            get_text(self.lang, "vote_line", name=html.escape(self.players[uid].name), count=v)
             for uid, v in sorted(tally.items(), key=lambda x: -x[1])
             if uid in self.players
         ]
@@ -1094,13 +1201,14 @@ class Game:
         leaders = [uid for uid, v in tally.items() if v == max_v and uid in self.players]
 
         if len(leaders) > 1:
-            names = ", ".join(self.players[uid].name for uid in leaders)
+            names = ", ".join(html.escape(self.players[uid].name) for uid in leaders)
             await self.send(
                 self.chat_id,
                 get_text(self.lang, "vote_results") + "\n" + "\n".join(tally_lines) +
                 "\n\n" + get_text(self.lang, "vote_tie", names=names)
             )
-            await self._maybe_continue()
+            if self.phase == Phase.VOTING:
+                await self._maybe_continue()
             return
 
         condemned = leaders[0]
@@ -1111,19 +1219,22 @@ class Game:
             p.is_alive = False
             traitor_msg = (
                 get_text(self.lang, "vote_results") + "\n" + "\n".join(tally_lines) +
-                "\n\n" + get_text(self.lang, "traitor_eliminated", name=p.name)
+                "\n\n" + get_text(self.lang, "traitor_eliminated", name=html.escape(p.name))
             )
             await self.send(self.chat_id, traitor_msg)
+            if self.phase != Phase.VOTING:
+                return
             if self.app is not None:
                 try:
                     await self.app.bot.send_photo(
                         chat_id=self.chat_id, photo=death_image_for(p.role, "vote"),
-                        caption=f"⚖️ <b>Oylama kararı: {p.name}</b>\n🎭 Rol: {get_role_text(self.lang, p.role.value)[0]}",
+                        caption=f"⚖️ <b>Oylama kararı: {html.escape(p.name)}</b>\n🎭 Rol: {html.escape(get_role_text(self.lang, p.role.value)[0])}",
                         parse_mode=ParseMode.HTML
                     )
                 except TelegramError as exc:
                     log.warning("Oylama ölüm görseli gönderilemedi: %s", exc)
-            await self._end_game("suicid", winner_id=condemned)
+            if self.phase == Phase.VOTING:
+                await self._end_game("suicid", winner_id=condemned)
             return
 
         # Kamikaze: kills a random extra player
@@ -1136,13 +1247,16 @@ class Game:
 
         # Defense phase
         self._defense_id = condemned
+        self._resolving_vote = False
         self.phase = Phase.DEFENSE
 
         msg = get_text(
             self.lang, "defense_prompt", votes="\n".join(tally_lines),
-            name=p.name, seconds=DEFENSE_TIMEOUT
+            name=html.escape(p.name), seconds=DEFENSE_TIMEOUT
         )
         await self.send(self.chat_id, msg)
+        if self.phase != Phase.DEFENSE:
+            return
 
         self._cancel()
         self._task = asyncio.create_task(
@@ -1154,22 +1268,27 @@ class Game:
         await self._execute(condemned_id, kamikaze_extra)
 
     async def _execute(self, condemned_id: int, kamikaze_extra: Optional[int]) -> None:
-        if self.phase not in (Phase.DEFENSE, Phase.VOTING):
+        if self.phase != Phase.DEFENSE or self._executing_vote:
             return
+        self._executing_vote = True
         p = self.players.get(condemned_id)
-        if not p:
+        if not p or not p.is_alive:
+            self._executing_vote = False
             return
 
         p.is_alive = False
         role_name, _ = get_role_text(self.lang, p.role.value)
-        msg = get_text(self.lang, "player_eliminated", name=p.name, role=role_name)
+        msg = get_text(self.lang, "player_eliminated", name=html.escape(p.name), role=html.escape(role_name))
 
         if kamikaze_extra and self.players.get(kamikaze_extra):
             victim = self.players[kamikaze_extra]
             victim.is_alive = False
-            msg += "\n\n" + get_text(self.lang, "kamikaze_hit", victim=victim.name)
+            msg += "\n\n" + get_text(self.lang, "kamikaze_hit", victim=html.escape(victim.name))
 
         await self.send(self.chat_id, msg)
+        if self.phase != Phase.DEFENSE:
+            self._executing_vote = False
+            return
         if self.app is not None:
             eliminated_players = [p]
             if kamikaze_extra and self.players.get(kamikaze_extra):
@@ -1186,15 +1305,22 @@ class Game:
                 except TelegramError as exc:
                     log.warning("Oylama ölüm görseli gönderilemedi: %s", exc)
 
+        if self.phase != Phase.DEFENSE:
+            self._executing_vote = False
+            return
+
         # Özel oyun kuralı: Baron Mehmet Karahanlı gündüz oylamasıyla
         # elenirse, hayatta başka Konsey üyeleri olsa bile Halk kazanır.
         if p.role == Role.DON:
             await self._end_game("town")
             return
 
+        self._executing_vote = False
         await self._maybe_continue()
 
     async def _maybe_continue(self) -> None:
+        self._resolving_night = False
+        self._resolving_vote = False
         winner = RoleEngine.check_win(self.players)
         if winner:
             winner_id = RoleEngine.last_standing_winner_id(self.players)
@@ -1204,6 +1330,9 @@ class Game:
 
     # ── End ───────────────────────────────────────────────────────
     async def _end_game(self, winner: str, winner_id: Optional[int] = None) -> None:
+        self._resolving_night = False
+        self._resolving_vote = False
+        self._executing_vote = False
         self.phase = Phase.ENDED
         self._cancel()
 
@@ -1230,7 +1359,7 @@ class Game:
             }.get(winner, "Oyun sona erdi.")
 
         end_caption = (
-            f"{emoji} <b>{html.escape(str(get_text(self.lang, 'game_over')))}</b>\n"
+            f"{emoji} <b>{html.escape(str(get_text(self.lang, 'game_over_title')))}</b>\n"
             f"<b>{html.escape(str(winner_text))}</b>\n\n"
             f"<b>{html.escape(str(get_text(self.lang, 'final_roles')))}</b>\n{reveal}\n\n"
             f"📊 {html.escape(str(get_text(self.lang, 'rounds_played', rounds=self.round)))}"
@@ -1257,40 +1386,56 @@ class Game:
                     log.warning("Final görseli gönderilemedi; metin sonucu yayınlandı: %s", exc)
 
         # Persist
-        await db.end_game(self.game_id, winner, self.round)
+        try:
+            await db.end_game(self.game_id, winner, self.round)
+        except Exception:
+            log.exception("Oyun sonucu veritabanına yazılamadı: %s", self.game_id)
 
-        all_elos = []
-        for p in self.players.values():
-            if p.user_id > 0:
-                s = await db.get_stats(p.user_id)
-                if s:
-                    all_elos.append(s["elo"])
-        avg_elo = sum(all_elos) // len(all_elos) if all_elos else 1000
+        player_elos = {}
+        for player in self.players.values():
+            if player.is_ai or player.user_id <= 0:
+                continue
+            try:
+                stats = await db.get_stats(player.user_id)
+                player_elos[player.user_id] = stats["elo"] if stats else 1000
+            except Exception:
+                log.exception("ELO bilgisi okunamadı: %s", player.user_id)
+                player_elos[player.user_id] = 1000
 
         for p in self.players.values():
             if p.is_ai or p.user_id < 0:
                 continue
+            opponent_elos = [elo for other_uid, elo in player_elos.items() if other_uid != p.user_id]
+            avg_opponent_elo = round(sum(opponent_elos) / len(opponent_elos)) if opponent_elos else 1000
             won = (
                 (winner == "town"   and not p.role.is_mafia_team) or
                 (winner == "mafia"  and p.role.is_mafia_team) or
                 (winner == "suicid" and p.role == Role.SUICID and p.user_id == winner_id)
             )
-            elo_ch = await db.update_player(
-                p.user_id, p.name, won, p.is_alive, p.role.value, avg_elo
-            )
+            try:
+                elo_ch = await db.update_player(
+                    p.user_id, p.name, won, p.is_alive, p.role.value, avg_opponent_elo
+                )
+            except Exception:
+                log.exception("Oyuncu istatistiği güncellenemedi: %s", p.user_id)
+                continue
             sign = "+" if elo_ch >= 0 else ""
             try:
+                player_lang = await db.get_language(p.user_id)
                 await self.send(
                     p.user_id,
-                    get_text(await db.get_language(p.user_id), "private_result",
-                             result=get_text(await db.get_language(p.user_id), "win_label" if won else "loss_label"),
+                    get_text(player_lang, "private_result",
+                             result=get_text(player_lang, "win_label" if won else "loss_label"),
                              sign=sign, elo=elo_ch)
                 )
             except Exception:
-                pass
+                log.exception("Oyuncuya sonuç DM'i gönderilemedi: %s", p.user_id)
 
     async def force_end(self) -> None:
         """Stop the active game without awarding a winner or changing player stats."""
+        self._resolving_night = False
+        self._resolving_vote = False
+        self._executing_vote = False
         self.phase = Phase.ENDED
         self._cancel()
         try:
@@ -1310,7 +1455,7 @@ class Game:
         role_name, role_description = get_role_text(display_lang, p.role.value)
         lines = [f"{p.role.emoji} <b>{get_text(display_lang, 'your_role', role=role_name)}</b>\n", role_description]
         if p.role.is_mafia_team:
-            mates = [q.name for qid, q in self.players.items()
+            mates = [html.escape(q.name) for qid, q in self.players.items()
                      if q.role.is_mafia_team and qid != uid]
             if mates:
                 lines.append(get_text(display_lang, "teammates", names=', '.join(mates)))
@@ -1341,9 +1486,11 @@ class Registry:
             del self._g[c]
         return len(ended)
 
-    def find_user(self, uid: int) -> Optional[Game]:
+    def find_user(self, uid: int, game_id: Optional[str] = None) -> Optional[Game]:
         for g in self._g.values():
-            if uid in g.players:
+            if game_id is not None and g.game_id != game_id:
+                continue
+            if uid in g.players and g.phase != Phase.ENDED:
                 return g
         return None
 
@@ -1364,6 +1511,10 @@ async def safe_send(app: Application, chat_id: int, text: str,
     except Forbidden:
         log.warning("Forbidden: %s", chat_id)
     except BadRequest as e:
+        error_text = str(e).lower()
+        if "chat not found" in error_text or "bot can't initiate conversation" in error_text:
+            log.warning("Mesaj gönderilecek sohbet bulunamadı veya erişilemiyor (%s): %s", chat_id, e)
+            return
         # Bozuk HTML biçimlendirmesi zafer/sonuç mesajını tamamen kaybettirmesin.
         log.warning("HTML mesajı gönderilemedi (%s): %s; düz metin deneniyor", chat_id, e)
         plain_text = html.unescape(re.sub(r"</?[^>]+>", "", text))
@@ -1388,22 +1539,25 @@ def make_send(app: Application) -> SendFn:
 # ══════════════════════════════════════════════════════════════════
 async def send_night_dm(app: Application, game: Game, uid: int) -> None:
     p = game.players.get(uid)
-    if not p or not p.is_alive or not p.role.has_night_action:
+    if game.phase != Phase.NIGHT or not p or not p.is_alive or not p.role.has_night_action:
         return
 
     alive_targets = [
-        (q.user_id, q.name)
+        (q.user_id, q.name[:45])
         for q in game.alive()
         if q.user_id != uid
+        and not (p.role.is_mafia_team and q.role.is_mafia_team)
     ]
+    if p.role == Role.SHIFOKOR:
+        alive_targets.insert(0, (uid, f"{p.name[:36]} (kendin)"))
 
     player_lang = await db.get_language(uid)
     verb = get_text(player_lang, "night_action_" + p.role.value)
     buttons = [
-        [InlineKeyboardButton(get_text(player_lang, "select_target", name=name), callback_data=f"night:{uid2}")]
+        [InlineKeyboardButton(get_text(player_lang, "select_target", name=name), callback_data=f"night:{game.game_id}:{uid2}")]
         for uid2, name in alive_targets
     ]
-    buttons.append([InlineKeyboardButton(get_text(player_lang, "skip_action"), callback_data="night:skip")])
+    buttons.append([InlineKeyboardButton(get_text(player_lang, "skip_action"), callback_data=f"night:{game.game_id}:skip")])
 
     try:
         await app.bot.send_message(
@@ -1412,7 +1566,7 @@ async def send_night_dm(app: Application, game: Game, uid: int) -> None:
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(buttons),
         )
-    except (Forbidden, BadRequest) as e:
+    except TelegramError as e:
         log.warning("Night DM fail %s: %s", uid, e)
 
 
@@ -1425,18 +1579,19 @@ def lobby_kb(n: int, is_host: bool, lang: str = "tr") -> InlineKeyboardMarkup:
          InlineKeyboardButton(get_text(lang, "leave_game"), callback_data="leave")],
         [InlineKeyboardButton(get_text(lang, "add_ai"), callback_data="add_ai")],
     ]
-    if is_host:
-        if n >= MIN_PLAYERS:
-            btns.append([InlineKeyboardButton(
-                get_text(lang, "start_game_button", count=n), callback_data="start_now"
-            )])
-        else:
-            btns.append([InlineKeyboardButton(
-                get_text(lang, "need_players_button", count=n, minimum=MIN_PLAYERS), callback_data="noop"
-            )])
+    # Controls remain visible on the shared group message; callbacks enforce
+    # host/admin permissions server-side, so one player's edit cannot hide them.
+    if n >= MIN_PLAYERS:
         btns.append([InlineKeyboardButton(
-            get_text(lang, "extend_lobby_button"), callback_data="extend_lobby"
+            get_text(lang, "start_game_button", count=n), callback_data="start_now"
         )])
+    else:
+        btns.append([InlineKeyboardButton(
+            get_text(lang, "need_players_button", count=n, minimum=MIN_PLAYERS), callback_data="noop"
+        )])
+    btns.append([InlineKeyboardButton(
+        get_text(lang, "extend_lobby_button"), callback_data="extend_lobby"
+    )])
     return InlineKeyboardMarkup(btns)
 
 
@@ -1573,7 +1728,7 @@ async def require_channel_membership(
     prompt_key = "channel_check_error" if check_error else "channel_required"
     prompt = get_text(lang, prompt_key)
     if check_error:
-        prompt += "\\n\\n" + get_text(lang, "channel_required")
+        prompt += "\n\n" + get_text(lang, "channel_required")
     await message.reply_text(
         prompt,
         parse_mode=ParseMode.HTML,
@@ -1731,6 +1886,11 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_newgame(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not await require_channel_membership(update, ctx):
         return
+    if update.effective_chat.type not in ("group", "supergroup"):
+        await update.effective_message.reply_text(
+            get_text(await db.get_language(update.effective_user.id), "newgame_group")
+        )
+        return
     chat_id = update.effective_chat.id
     user    = update.effective_user
 
@@ -1746,8 +1906,9 @@ async def cmd_newgame(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     g.join(user.id, user.full_name)
 
     lobby_text = get_text(
-        g.lang, "lobby_created", name=user.full_name,
-        maximum=MAX_PLAYERS, seconds=LOBBY_TIMEOUT
+        g.lang, "lobby_created", host=html.escape(user.full_name), n=1,
+        maximum=MAX_PLAYERS, players=f"  ✅ {html.escape(user.full_name)}",
+        seconds=LOBBY_TIMEOUT
     )
     try:
         msg = await update.message.reply_photo(
@@ -1780,14 +1941,15 @@ async def cmd_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if g.join(user.id, user.full_name):
         n = g.n()
-        plist = "\n".join(f"  ✅ {p.name}" for p in g.players.values())
+        plist = "\n".join(f"  ✅ {html.escape(p.name)}" for p in g.players.values())
         await update.message.reply_text(
-            get_text(g.lang, "lobby_joined", name=user.full_name, count=n, maximum=MAX_PLAYERS, players=plist),
+            get_text(g.lang, "lobby_joined", name=html.escape(user.full_name), count=n, maximum=MAX_PLAYERS, players=plist),
             parse_mode=ParseMode.HTML,
-            reply_markup=lobby_kb(n, is_host=(user.id == g.host_id), lang=g.lang),
+            reply_markup=lobby_kb(n, is_host=True, lang=g.lang),
         )
     else:
-        await update.message.reply_text(get_text(g.lang, "already_joined"))
+        key = "already_joined" if user.id in g.players else ("lobby_full" if g.n() >= MAX_PLAYERS else "already_joined")
+        await update.message.reply_text(get_text(g.lang, key))
 
 
 async def cmd_leave(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1801,10 +1963,11 @@ async def cmd_leave(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if g.leave(user.id):
         n = g.n()
+        plist = "\n".join(f"  ✅ {html.escape(p.name)}" for p in g.players.values()) or "(boş)"
         await update.message.reply_text(
-            get_text(g.lang, "lobby_left", name=user.full_name, count=n, maximum=MAX_PLAYERS),
+            get_text(g.lang, "lobby_left", name=html.escape(user.full_name), count=n, maximum=MAX_PLAYERS, players=plist),
             parse_mode=ParseMode.HTML,
-            reply_markup=lobby_kb(n, is_host=(user.id == g.host_id), lang=g.lang),
+            reply_markup=lobby_kb(n, is_host=True, lang=g.lang),
         )
     else:
         await update.message.reply_text(get_text(g.lang, "not_in_lobby"))
@@ -1850,14 +2013,14 @@ async def cmd_players(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not await require_channel_membership(update, ctx):
         return
     g = reg.get(update.effective_chat.id)
-    if not g:
+    if not g or g.phase == Phase.ENDED:
         await update.message.reply_text(get_text(await db.get_group_language(update.effective_chat.id), "no_game"))
         return
     lines = [get_text(g.lang, "players_title", game_id=g.game_id, phase=get_text(g.lang, "phase_" + g.phase.name.lower())) + "\n"]
     for p in g.players.values():
         icon = "✅" if p.is_alive else "💀"
         ai = " 🤖" if p.is_ai else ""
-        lines.append(f"  {icon} {p.name}{ai}")
+        lines.append(f"  {icon} {html.escape(p.name)}{ai}")
     lines.append("\n⏱ " + get_text(g.lang, "round_label", round=g.round))
     players_text = "\n".join(lines)
     try:
@@ -1873,7 +2036,12 @@ async def cmd_myrole(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not await require_channel_membership(update, ctx):
         return
     uid = update.effective_user.id
-    g = reg.find_user(uid)
+    if update.effective_chat.type in ("group", "supergroup"):
+        g = reg.get(update.effective_chat.id)
+        if g and (uid not in g.players or g.phase == Phase.ENDED):
+            g = None
+    else:
+        g = reg.find_user(uid)
     if not g:
         await update.effective_message.reply_text(get_text(await db.get_language(uid), "not_in_game"))
         return
@@ -1925,14 +2093,32 @@ async def edit_callback_message(q, text: str, reply_markup=None, parse_mode=Pars
         )
 
     if message.text is not None:
-        return await q.edit_message_text(
-            text, parse_mode=parse_mode, reply_markup=reply_markup
-        )
+        try:
+            return await q.edit_message_text(
+                text, parse_mode=parse_mode, reply_markup=reply_markup
+            )
+        except BadRequest as exc:
+            if "message is not modified" in str(exc).lower():
+                return None
+            raise
 
     if message.caption is not None:
-        return await q.edit_message_caption(
-            caption=text, parse_mode=parse_mode, reply_markup=reply_markup
-        )
+        try:
+            return await q.edit_message_caption(
+                caption=text, parse_mode=parse_mode, reply_markup=reply_markup
+            )
+        except BadRequest as exc:
+            if "message is not modified" in str(exc).lower():
+                return None
+            if "caption" not in str(exc).lower() and "too long" not in str(exc).lower():
+                raise
+            # Telegram captions are limited to 1024 characters. If the lobby
+            # grows beyond that, move the updated lobby to a normal text post.
+            await q.edit_message_reply_markup(reply_markup=None)
+            return await q.get_bot().send_message(
+                chat_id=message.chat_id, text=text, parse_mode=parse_mode,
+                reply_markup=reply_markup
+            )
 
     # Fotoğraf/video gibi metinsiz medya mesajlarında metin düzenlenemez.
     # Eski butonları kaldırıp güncel lobi bilgisini yeni mesaj olarak gönder.
@@ -2012,12 +2198,19 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     if data == "choose_language":
         lang = await db.get_language(uid)
-        await q.edit_message_text(
-            get_text(lang, "choose_language"),
+        await edit_callback_message(
+            q, get_text(lang, "choose_language"),
             parse_mode=ParseMode.HTML,
             reply_markup=language_kb(),
         )
         await q.answer()
+        return
+
+    if data == "channel_link_missing":
+        await q.answer(
+            get_text(await db.get_language(uid), "channel_url_missing"),
+            show_alert=True,
+        )
         return
 
     # A'zolikni tekshirish tugmasi boshqa barcha cheklovlardan oldin ishlaydi.
@@ -2048,19 +2241,27 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             return
 
         elif data == "new_game":
-            await q.answer(get_text(await db.get_group_language(cid), "newgame_group"), show_alert=True)
+            await q.answer(get_text(await db.get_language(uid), "newgame_group"), show_alert=True)
             return
 
         elif data == "howto":
-            await q.answer(get_text(await db.get_group_language(cid), "help_message")[:190], show_alert=True)
+            if q.message and q.message.chat.type in ("group", "supergroup"):
+                help_lang = await db.get_group_language(cid)
+            else:
+                help_lang = await db.get_language(uid)
+            await q.answer(get_text(help_lang, "help_message")[:190], show_alert=True)
             return
 
         elif data == "stats_menu":
+            if q.message and q.message.chat.type in ("group", "supergroup"):
+                lang = await db.get_group_language(cid)
+            else:
+                lang = await db.get_language(uid)
             await q.answer()
-            await q.edit_message_text(
-                get_text(await db.get_group_language(cid), "stats_title"),
+            await edit_callback_message(
+                q, get_text(lang, "stats_title"),
                 parse_mode=ParseMode.HTML,
-                reply_markup=stats_kb(await db.get_group_language(cid)),
+                reply_markup=stats_kb(lang),
             )
             return
 
@@ -2074,7 +2275,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             lines = [get_text(await db.get_language(uid), "leaderboard_title") + "\n"]
             for i, r in enumerate(rows):
                 lines.append(
-                    f"{medals[i]} <b>{r['username']}</b> — " +
+                    f"{medals[i]} <b>{html.escape(r['username'])}</b> — " +
                     get_text(await db.get_language(uid), "leaderboard_row", elo=r['elo'], wins=r['wins'], games=r['games'], wr=r['wr'])
                 )
             try:
@@ -2082,7 +2283,8 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     uid, "\n".join(lines), parse_mode=ParseMode.HTML
                 )
                 await q.answer(get_text(await db.get_language(uid), "dm_leaderboard"))
-            except Forbidden:
+            except TelegramError as exc:
+                log.warning("Sıralama DM gönderilemedi (%s): %s", uid, exc)
                 await q.answer("\n".join(lines)[:200], show_alert=True)
 
         elif data == "my_stats":
@@ -2101,13 +2303,14 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                     role_emoji = "🎭"
                 rw_rows.append(f"  {role_emoji} {role_name}: {count}")
             rw_lines = "\n".join(rw_rows) or "  —"
-            msg = get_text(lang, "personal_stats", username=s['username'], games=s['games'],
+            msg = get_text(lang, "personal_stats", username=html.escape(s['username']), games=s['games'],
                            wins=s['wins'], wr=wr, losses=s['losses'], survived=s['survived'],
                            elo=s['elo'], streak=s['best_streak'], roles=rw_lines)
             try:
                 await ctx.application.bot.send_message(uid, msg, parse_mode=ParseMode.HTML)
                 await q.answer(get_text(lang, "dm_stats"))
-            except Forbidden:
+            except TelegramError as exc:
+                log.warning("İstatistik DM gönderilemedi (%s): %s", uid, exc)
                 await q.answer(msg[:200], show_alert=True)
 
         elif data == "global_stats":
@@ -2152,25 +2355,26 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             if g.join(uid, name):
                 await q.answer()
                 n = g.n()
-                plist = "\n".join(f"  ✅ {p.name}" for p in g.players.values())
+                plist = "\n".join(f"  ✅ {html.escape(p.name)}" for p in g.players.values())
                 await edit_callback_message(
-                    q, get_text(g.lang, "lobby_joined", name=name, count=n, maximum=MAX_PLAYERS, players=plist),
+                    q, get_text(g.lang, "lobby_joined", name=html.escape(name), count=n, maximum=MAX_PLAYERS, players=plist),
                     parse_mode=ParseMode.HTML,
-                    reply_markup=lobby_kb(n, is_host=(uid == g.host_id), lang=g.lang),
+                    reply_markup=lobby_kb(n, is_host=True, lang=g.lang),
                 )
             else:
-                await q.answer(get_text(g.lang, "already_joined"), show_alert=True)
+                key = "already_joined" if uid in g.players else ("lobby_full" if g.n() >= MAX_PLAYERS else "already_joined")
+                await q.answer(get_text(g.lang, key), show_alert=True)
 
         elif data == "leave":
             g = reg.get(cid)
             if g and g.leave(uid):
                 await q.answer()
                 n = g.n()
-                plist = "\n".join(f"  ✅ {p.name}" for p in g.players.values()) or "(bo'sh)"
+                plist = "\n".join(f"  ✅ {html.escape(p.name)}" for p in g.players.values()) or "(bo'sh)"
                 await edit_callback_message(
-                    q, get_text(g.lang, "lobby_joined", name=name, count=n, maximum=MAX_PLAYERS, players=plist),
+                    q, get_text(g.lang, "lobby_joined", name=html.escape(name), count=n, maximum=MAX_PLAYERS, players=plist),
                     parse_mode=ParseMode.HTML,
-                    reply_markup=lobby_kb(n, is_host=(uid == g.host_id), lang=g.lang),
+                    reply_markup=lobby_kb(n, is_host=True, lang=g.lang),
                 )
             else:
                 await q.answer(get_text(g.lang if g else await db.get_group_language(cid), "not_in_lobby"), show_alert=True)
@@ -2186,9 +2390,9 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             if g.add_ai():
                 await q.answer()
                 n = g.n()
-                plist = "\n".join(f"  ✅ {p.name}" for p in g.players.values())
+                plist = "\n".join(f"  ✅ {html.escape(p.name)}" for p in g.players.values())
                 await edit_callback_message(
-                    q, get_text(g.lang, "lobby_joined", name=name, count=n, maximum=MAX_PLAYERS, players=plist),
+                    q, get_text(g.lang, "lobby_joined", name=html.escape(name), count=n, maximum=MAX_PLAYERS, players=plist),
                     parse_mode=ParseMode.HTML,
                     reply_markup=lobby_kb(n, is_host=True, lang=g.lang),
                 )
@@ -2218,15 +2422,20 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 await q.answer(get_text(g.lang, "start_min", minimum=MIN_PLAYERS), show_alert=True)
                 return
             await q.answer()
-            await q.edit_message_text(get_text(g.lang, "starting_game"), parse_mode=ParseMode.HTML)
+            await edit_callback_message(q, get_text(g.lang, "starting_game"), parse_mode=ParseMode.HTML)
             result = await g.start_game()
             if result != "ok":
                 await safe_send(ctx.application, cid, result)
 
         # ── night action ───────────────────────────────────────
         elif data.startswith("night:"):
-            ts = data.split(":", 1)[1]
-            g = reg.find_user(uid)
+            parts = data.split(":", 2)
+            if len(parts) == 3:
+                _, game_id, ts = parts
+                g = reg.find_user(uid, game_id=game_id)
+            else:
+                ts = parts[1]
+                g = reg.find_user(uid)
             if not g:
                 await q.answer(get_text(await db.get_language(uid), "not_in_game"), show_alert=True)
                 return
