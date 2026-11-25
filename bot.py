@@ -2191,12 +2191,13 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
     if lang not in ("tr", "en", "ru", "uz", "ar", "de"):
         help_text = await google_translate(help_text, lang)
+    help_markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎭 RP MODELS", callback_data="rp_models")],
+        [InlineKeyboardButton("⭐ Stars ile destek ol", callback_data="donate_menu")],
+    ])
     await update.effective_message.reply_text(
         help_text, parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🎭 RP MODELS", callback_data="rp_models")],
-            [InlineKeyboardButton("⭐ Stars ile destek ol", callback_data="donate_menu")],
-        ])
+        reply_markup=await translate_markup(help_markup, lang)
     )
 
 
@@ -2605,12 +2606,13 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             if help_lang not in ("tr", "en", "ru", "uz", "ar", "de"):
                 help_text = await google_translate(help_text, help_lang)
             await q.answer()
+            help_markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🎭 RP MODELS", callback_data="rp_models")],
+                [InlineKeyboardButton("⭐ Stars ile destek ol", callback_data="donate_menu")],
+            ])
             await edit_callback_message(
                 q, help_text, parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🎭 RP MODELS", callback_data="rp_models")],
-                    [InlineKeyboardButton("⭐ Stars ile destek ol", callback_data="donate_menu")],
-                ])
+                reply_markup=await translate_markup(help_markup, help_lang)
             )
             return
 
