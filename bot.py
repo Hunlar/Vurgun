@@ -1278,7 +1278,7 @@ class Game:
             return get_text(display_lang, "cannot_vote")
         if not tp or not tp.is_alive:
             return get_text(display_lang, "invalid_target")
-        if voter == target:
+        if voter == target and vp.role != Role.DELI_HIKMET:
             return get_text(display_lang, "self_vote")
         if vp.role == Role.DELI_HIKMET:
             choices = [x.user_id for x in self.alive() if x.user_id != voter]
