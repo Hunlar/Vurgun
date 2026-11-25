@@ -39,6 +39,10 @@
       "description": "Destek grubu veya destek kanali baglantisi",
       "required": false
     },
+    "GOOGLE_TRANSLATE_API_KEY": {
+      "description": "Google Cloud Translation API anahtari (Azerbaycan Turkcesi ve Farsca icin)",
+      "required": false
+    },
     "DB_PATH": {
       "description": "SQLite veritabani yolu",
       "value": "mafia.db",
