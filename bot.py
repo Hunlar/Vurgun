@@ -915,6 +915,7 @@ class Game:
                     continue
                 player_lang = await db.get_language(player.user_id)
                 role_text = self.role_info(player.user_id, player_lang)
+                role_text = await google_translate(role_text, player_lang)
                 photo = ROLE_IMAGES.get(player.role.value)
                 try:
                     delivered = False
@@ -1159,6 +1160,7 @@ class Game:
                 owner.role == Role.ELIF_EYLUL and owner.ship_partner == uid
                 for owner in self.players.values()
             )
+            death_caption = await google_translate(death_caption, self.lang)
             image = KIZ_KULESI_DEATH_IMAGE if p.role == Role.ELIF_EYLUL or is_ship_partner else death_image_for(p.role, "night")
             sent = False
             if self.app is not None and image:
@@ -1274,14 +1276,16 @@ class Game:
         if self.app is not None:
             try:
                 vote_text = await google_translate(get_text(self.lang, "voting_started", seconds=VOTE_TIMEOUT), self.lang)
-                vote_msg = await self.app.bot.send_message(chat_id=self.chat_id, text=vote_text, reply_markup=InlineKeyboardMarkup(buttons))
+                vote_markup = await translate_markup(InlineKeyboardMarkup(buttons), self.lang)
+                vote_msg = await self.app.bot.send_message(chat_id=self.chat_id, text=vote_text, reply_markup=vote_markup)
                 self._vote_message_id = vote_msg.message_id
             except TelegramError as exc:
                 log.warning("Oylama mesajı gönderilemedi: %s", exc)
                 self._vote_message_id = None
         else:
             vote_text = await google_translate(get_text(self.lang, "voting_started", seconds=VOTE_TIMEOUT), self.lang)
-            await self.send(self.chat_id, vote_text, markup=InlineKeyboardMarkup(buttons))
+            vote_markup = await translate_markup(InlineKeyboardMarkup(buttons), self.lang)
+            await self.send(self.chat_id, vote_text, markup=vote_markup)
         if self.phase != Phase.VOTING:
             return
 
@@ -1588,6 +1592,7 @@ class Game:
             f"<b>{html.escape(str(get_text(self.lang, 'final_roles')))}</b>\n{reveal}\n\n"
             f"📊 {html.escape(str(get_text(self.lang, 'rounds_played', rounds=self.round)))}"
         )
+        end_caption = await google_translate(end_caption, self.lang)
         # Final sonucunu genel safe_send katmanından bağımsız gönder.
         # safe_send bazı Telegram hatalarını yuttuğu için burada başarı/başarısızlık
         # açıkça loglanır; HTML reddedilirse düz metin yedeği denenir.
