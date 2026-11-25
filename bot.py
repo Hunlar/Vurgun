@@ -24,13 +24,13 @@ from typing import Optional, Callable, Awaitable
 
 import aiosqlite
 from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, LabeledPrice
 )
 from telegram.constants import ParseMode
 from telegram.error import Forbidden, BadRequest, TelegramError
 from telegram.ext import (
     Application, ApplicationBuilder, CallbackQueryHandler,
-    CommandHandler, ContextTypes, MessageHandler, filters,
+    CommandHandler, ContextTypes, MessageHandler, PreCheckoutQueryHandler, filters,
 )
 from languages import LANGUAGES, get_text, get_role_text as _get_role_text, get_achievement_text
 
@@ -1938,11 +1938,37 @@ async def is_group_admin(ctx: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: 
 
 
 def main_kb(lang: str = "tr") -> InlineKeyboardMarkup:
+    """Compact, formal main menu: keep secondary features off the welcome screen."""
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎭 RP MODELS", callback_data="rp_models")],
         [InlineKeyboardButton(get_text(lang, "new_game"), callback_data="new_game"),
          InlineKeyboardButton(get_text(lang, "stats"), callback_data="stats_menu")],
-        [InlineKeyboardButton(get_text(lang, "rules"), callback_data="howto")],
+        [InlineKeyboardButton("📖 " + ("Yardım" if lang == "tr" else "Help"), callback_data="howto"),
+         InlineKeyboardButton("⭐ " + ("Destek ol" if lang == "tr" else "Support"), callback_data="donate_menu")],
         [InlineKeyboardButton(get_text(lang, "language"), callback_data="choose_language")],
+    ])
+
+
+def roles_catalog_text() -> str:
+    lines = [
+        "🎭 <b>RP MODELS — ROL KATALOĞU</b>",
+        "<i>Oyundaki karakterler, görevleri ve özel yetenekleri.</i>",
+        "",
+    ]
+    for role in Role:
+        lines.append(f"{role.emoji} <b>{html.escape(role.uz_name)}</b>")
+        lines.append(html.escape(role.description))
+        lines.append("")
+    lines.append("<i>Rol yetenekleri oyun başlamadan önce gizli tutulur.</i>")
+    return "\n".join(lines)
+
+
+def donation_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⭐ 50 Stars", callback_data="donate:50"),
+         InlineKeyboardButton("⭐ 100 Stars", callback_data="donate:100")],
+        [InlineKeyboardButton("⭐ 250 Stars", callback_data="donate:250")],
+        [InlineKeyboardButton("↩️ Ana menü", callback_data="back_main")],
     ])
 
 
@@ -2063,9 +2089,20 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 await send_night_dm(ctx.application, active_game, user.id)
             return
     try:
+        welcome = (
+            "🎭 <b>KVP GAME</b>\n"
+            "<i>Strateji • Gizli roller • Sosyal çıkarım</i>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "Güven, şüphe ve stratejinin belirlediği bir dünyaya hoş geldin. "
+            "Karakterini keşfet, takımını kur ve oyunun kaderini değiştir.\n\n"
+            "🎮 Yeni bir oyun başlatmak için menüyü kullan.\n"
+            "📚 <b>RP MODELS</b> bölümünden rollerin görevlerini incele.\n"
+            "⭐ Dilersen Telegram Stars ile projeye destek olabilirsin."
+        )
+        welcome = await google_translate(welcome, lang) if lang not in ("tr", "en", "ru", "uz", "ar", "de") else (get_text(lang, "welcome") if lang != "tr" else welcome)
         await update.message.reply_photo(
-            photo=ROLE_IMAGES["fuqaro"], caption=get_text(lang, "welcome"),
-            parse_mode=ParseMode.HTML, reply_markup=main_kb(lang)
+            photo=ROLE_IMAGES["fuqaro"], caption=welcome,
+            parse_mode=ParseMode.HTML, reply_markup=await translate_markup(main_kb(lang), lang)
         )
     except TelegramError:
         await update.message.reply_text(
@@ -2163,27 +2200,49 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not await require_channel_membership(update, ctx):
         return
     chat = update.effective_chat
-    if chat and chat.type in ("group", "supergroup"):
-        lang = await db.get_group_language(chat.id)
-    else:
-        lang = await db.get_language(update.effective_user.id)
-    help_text = get_text(lang, "help_message")
-    cakir_help = {
-        "tr": "🥃 Süleyman Çakır — Halk takımında, özel gece yeteneği yok.",
-        "en": "🥃 Suleyman Cakir — Town team; no special night ability.",
-        "ru": "🥃 Сулейман Чакыр — команда горожан; без ночной способности.",
-        "uz": "🥃 Süleyman Çakır — Xalq jamoasi; tungi qobiliyati yo‘q.",
-        "ar": "🥃 سليمان جاكير — ضمن فريق المواطنين؛ بلا قدرة ليلية خاصة.",
-        "de": "🥃 Süleyman Çakır — Bürgerteam; keine besondere Nachtfähigkeit.",
-    }
-    help_text += "\n\n" + cakir_help.get(lang, cakir_help["tr"])
-    try:
-        await update.effective_message.reply_photo(
-            photo=ROLE_IMAGES["mafia"], caption=help_text,
-            parse_mode=ParseMode.HTML
-        )
-    except TelegramError:
-        await update.effective_message.reply_text(help_text, parse_mode=ParseMode.HTML)
+    lang = await db.get_group_language(chat.id) if chat and chat.type in ("group", "supergroup") else await db.get_language(update.effective_user.id)
+    help_text = (
+        "📖 <b>KVP GAME — HIZLI YARDIM</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "<b>OYUN KOMUTLARI</b>\n"
+        "• /newgame — Grup içinde oyun lobisi aç\n"
+        "• /join — Açık lobiye katıl\n"
+        "• /leave — Lobiden ayrıl\n"
+        "• /startgame — Oyunu başlat (kurucu/yönetici)\n"
+        "• /endgame — Oyunu bitir (kurucu/yönetici)\n\n"
+        "<b>OYUNCU MENÜSÜ</b>\n"
+        "• /players — Oyuncu listesini gör\n"
+        "• /myrole — Kendi rolünü ve görevini gör\n"
+        "• /stats — İstatistiklerini incele\n\n"
+        "<b>AYARLAR</b>\n"
+        "• /language — Kişisel dil\n"
+        "• /grouplanguage — Grup dili (yönetici)\n\n"
+        "🎭 Roller ve yetenekler: <b>RP MODELS</b>\n"
+        "⭐ Projeye destek: <b>Stars</b> menüsü"
+    )
+    if lang not in ("tr", "en", "ru", "uz", "ar", "de"):
+        help_text = await google_translate(help_text, lang)
+    await update.effective_message.reply_text(
+        help_text, parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎭 RP MODELS", callback_data="rp_models")],
+            [InlineKeyboardButton("⭐ Stars ile destek ol", callback_data="donate_menu")],
+        ])
+    )
+
+
+async def cmd_precheckout(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.pre_checkout_query
+    await query.answer(ok=True)
+
+
+async def cmd_successful_payment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    payment = update.effective_message.successful_payment
+    lang = await db.get_language(update.effective_user.id)
+    thanks = "⭐ Desteğin için çok teşekkür ederiz! Katkın KVP GAME'in gelişmesine yardımcı oluyor."
+    if lang not in ("tr", "en", "ru", "uz", "ar", "de"):
+        thanks = await google_translate(thanks, lang)
+    await update.effective_message.reply_text(thanks)
 
 
 async def cmd_newgame(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2552,7 +2611,71 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 help_lang = await db.get_group_language(cid)
             else:
                 help_lang = await db.get_language(uid)
-            await q.answer(get_text(help_lang, "help_message")[:190], show_alert=True)
+            help_text = (
+                "📖 <b>KVP GAME — HIZLI YARDIM</b>\n━━━━━━━━━━━━━━━━━━\n"
+                "<b>Oyun:</b> /newgame • /join • /leave • /startgame • /endgame\n"
+                "<b>Oyuncu:</b> /players • /myrole • /stats\n"
+                "<b>Ayarlar:</b> /language • /grouplanguage\n\n"
+                "Rol açıklamaları için RP MODELS bölümünü aç."
+            )
+            if help_lang not in ("tr", "en", "ru", "uz", "ar", "de"):
+                help_text = await google_translate(help_text, help_lang)
+            await q.answer()
+            await edit_callback_message(
+                q, help_text, parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🎭 RP MODELS", callback_data="rp_models")],
+                    [InlineKeyboardButton("⭐ Stars ile destek ol", callback_data="donate_menu")],
+                ])
+            )
+            return
+
+        elif data == "rp_models":
+            role_text = roles_catalog_text()
+            role_lang = await db.get_group_language(cid) if q.message and q.message.chat.type in ("group", "supergroup") else await db.get_language(uid)
+            if role_lang not in ("tr", "en", "ru", "uz", "ar", "de"):
+                role_text = await google_translate(role_text, role_lang)
+            await q.answer()
+            await edit_callback_message(
+                q, role_text, parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ Ana menü", callback_data="back_main")]])
+            )
+            return
+
+        elif data == "donate_menu":
+            await q.answer()
+            await edit_callback_message(
+                q,
+                "⭐ <b>KVP GAME'e destek ol</b>\n\nTelegram Stars ile gönüllü katkıda bulunabilirsin. Desteğin geliştirme ve sunucu giderlerine yardımcı olur.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=donation_kb()
+            )
+            return
+
+        elif data.startswith("donate:"):
+            amount = int(data.split(":", 1)[1])
+            if amount not in (50, 100, 250):
+                await q.answer("Geçersiz bağış miktarı.", show_alert=True)
+                return
+            await q.answer()
+            await ctx.bot.send_invoice(
+                chat_id=uid,
+                title="KVP GAME — Destek",
+                description=f"KVP GAME projesine {amount} Telegram Stars ile gönüllü destek.",
+                payload=f"kvpgame-donation-{uid}-{amount}",
+                provider_token="",
+                currency="XTR",
+                prices=[LabeledPrice(label=f"{amount} Telegram Stars", amount=amount)],
+            )
+            return
+
+        elif data == "back_main":
+            back_lang = await db.get_language(uid)
+            await q.answer()
+            await edit_callback_message(
+                q, get_text(back_lang, "welcome"),
+                parse_mode=ParseMode.HTML, reply_markup=main_kb(back_lang)
+            )
             return
 
         elif data == "stats_menu":
@@ -2876,6 +2999,8 @@ def main() -> None:
     app.add_handler(CommandHandler("players",   cmd_players))
     app.add_handler(CommandHandler("myrole",    cmd_myrole))
     app.add_handler(CommandHandler("stats",     cmd_stats))
+    app.add_handler(PreCheckoutQueryHandler(cmd_precheckout))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, cmd_successful_payment))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_error_handler(on_error)
 
