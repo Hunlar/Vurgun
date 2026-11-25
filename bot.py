@@ -155,6 +155,9 @@ class Role(Enum):
     KAMIKAZE = "kamikaze"
     CAKIR    = "cakir"
     SUICID   = "suicid"
+    ELIF_EYLUL = "elif_eylul"
+    OMER_BABA = "omer_baba"
+    DELI_HIKMET = "deli_hikmet"
 
     @property
     def emoji(self) -> str:
@@ -169,6 +172,9 @@ class Role(Enum):
             Role.KAMIKAZE: "💣",
             Role.CAKIR:    "🥃",
             Role.SUICID:   "🎭",
+            Role.ELIF_EYLUL: "🚢",
+            Role.OMER_BABA: "📖",
+            Role.DELI_HIKMET: "🤪",
         }[self]
 
     @property
@@ -184,6 +190,9 @@ class Role(Enum):
             Role.KAMIKAZE: "Memati Baş",
             Role.CAKIR:    "Süleyman Çakır",
             Role.SUICID:   "Hain",
+            Role.ELIF_EYLUL: "Elif Eylül",
+            Role.OMER_BABA: "Ömer Baba",
+            Role.DELI_HIKMET: "Deli Hikmet",
         }[self]
 
     @property
@@ -194,7 +203,7 @@ class Role(Enum):
     def has_night_action(self) -> bool:
         return self in (
             Role.MAFIA, Role.DON, Role.KOMISSAR,
-            Role.SHIFOKOR, Role.GUVOH
+            Role.SHIFOKOR, Role.GUVOH, Role.ELIF_EYLUL, Role.CAKIR
         )
 
     @property
@@ -210,13 +219,17 @@ class Role(Enum):
             Role.KAMIKAZE: "Memati Baş olarak gündüz oylamasıyla elenirsen yanında rastgele bir oyuncuyu da götürürsün.",
             Role.CAKIR:    "Süleyman Çakır olarak halk takımındasın. Özel gece yeteneğin yok; Konsey'i bulup oylamada ele.",
             Role.SUICID:   "Hain olarak gündüz oylamasıyla elenirsen kendi zaferini kazanırsın.",
+            Role.ELIF_EYLUL: "Gece DM üzerinden gemi arkadaşını seç. Sen ölürsen gemi arkadaşın da ölür.",
+            Role.OMER_BABA: "İki gecede bir hikâye anlatarak tüm gece yeteneklerini devre dışı bırakır.",
+            Role.DELI_HIKMET: "Oylamada hangi isme basarsan bas, oyun senin yerine rastgele bir hedef seçer.",
         }[self]
 
 
 ROLE_POWER = {
     Role.DON: 100, Role.KOMISSAR: 90, Role.SHIFOKOR: 80,
     Role.GUVOH: 70, Role.KAMIKAZE: 60, Role.MAFIA: 50,
-    Role.SUICID: 40, Role.CAKIR: 15, Role.FUQARO: 10,
+    Role.SUICID: 40, Role.CAKIR: 75, Role.ELIF_EYLUL: 65,
+    Role.OMER_BABA: 35, Role.DELI_HIKMET: 10, Role.FUQARO: 10,
 }
 
 
@@ -239,6 +252,8 @@ class Player:
     is_ai:        bool = False
     night_target: Optional[int] = None
     has_acted:    bool = False
+    ship_partner: Optional[int] = None
+    last_special_round: int = -100
 
     def reset_night(self):
         self.night_target = None
@@ -285,6 +300,7 @@ def build_role_list(n: int) -> list[Role]:
         mafia_n = max(2, n // 4)
         roles = [Role.DON] + [Role.MAFIA] * mafia_n
         roles += [Role.KOMISSAR, Role.SHIFOKOR, Role.GUVOH, Role.KAMIKAZE, Role.SUICID, Role.CAKIR]
+        roles += [Role.ELIF_EYLUL, Role.OMER_BABA, Role.DELI_HIKMET]
         roles += [Role.FUQARO] * (n - len(roles))
         return roles
 
@@ -732,6 +748,7 @@ class Game:
         self._resolving_night = False
         self._resolving_vote = False
         self._executing_vote = False
+        self._vote_message_id: Optional[int] = None
 
     # ── Lobby ──────────────────────────────────────────────────────
     def join(self, uid: int, name: str) -> bool:
@@ -902,6 +919,34 @@ class Game:
         for p in self.players.values():
             p.reset_night()
 
+        self._omer_silence = (self.round % 2 == 0 and any(
+            p.is_alive and p.role == Role.OMER_BABA for p in self.players.values()
+        ))
+        if self._omer_silence:
+            for p in self.players.values():
+                if p.is_alive and p.role.has_night_action:
+                    p.has_acted = True
+            for p in self.players.values():
+                if p.is_alive and not p.is_ai and p.role.has_night_action and self.app:
+                    try:
+                        await self.app.bot.send_message(chat_id=p.user_id, text="📖 Ömer Baba bir hikâye anlatıyor bir gün bir sahbe... Bu gece yetenekler mühürlendi.")
+                    except TelegramError:
+                        pass
+        else:
+            for p in self.players.values():
+                if p.is_alive and p.role == Role.OMER_BABA:
+                    p.has_acted = True
+        if self.app is not None and not self._omer_silence:
+            for p in self.players.values():
+                if p.is_alive and not p.is_ai and p.user_id > 0 and p.role.has_night_action:
+                    if p.role == Role.ELIF_EYLUL and p.ship_partner is not None:
+                        p.has_acted = True
+                        continue
+                    if p.role == Role.CAKIR and self.round - p.last_special_round < 2:
+                        p.has_acted = True
+                        continue
+                    await send_night_dm(self.app, self, p.user_id)
+
         await self.send(
             self.chat_id,
             get_text(self.lang, "night_started", round=self.round, seconds=NIGHT_TIMEOUT)
@@ -958,6 +1003,12 @@ class Game:
             return get_text(display_lang, "not_alive")
         if not p.role.has_night_action:
             return get_text(display_lang, "no_night_action")
+        if getattr(self, "_omer_silence", False):
+            return "📖 Ömer Baba bu gece tüm yetenekleri susturdu."
+        if p.role == Role.ELIF_EYLUL and p.ship_partner is not None:
+            return "🚢 Gemi arkadaşını zaten seçtin."
+        if p.role == Role.CAKIR and self.round - p.last_special_round < 2:
+            return "⏳ Çakır'ın silahı henüz hazır değil; iki gece beklemelisin."
         t = self.players.get(target_id)
         if not t or not t.is_alive:
             return get_text(display_lang, "invalid_target")
@@ -965,6 +1016,20 @@ class Game:
             return get_text(display_lang, "self_target")
         if p.role.is_mafia_team and t.role.is_mafia_team:
             return get_text(display_lang, "invalid_target")
+        if p.role == Role.ELIF_EYLUL:
+            if target_id == uid:
+                return "Kendini gemi arkadaşı seçemezsin."
+            p.ship_partner = target_id
+            p.has_acted = True
+            return f"🚢 Gemi arkadaşın {html.escape(t.name)} olarak seçildi. Sen ölürsen o da ölecek."
+        if p.role == Role.CAKIR:
+            p.night_target = target_id
+            p.has_acted = True
+            p.last_special_round = self.round
+            if self._all_acted():
+                self._cancel()
+                asyncio.create_task(self._resolve_night())
+            return f"🥃 Hedefin {html.escape(t.name)}. Racon kesildi."
         p.night_target = target_id
         p.has_acted = True
         if self._all_acted():
@@ -998,7 +1063,27 @@ class Game:
         self._resolving_night = True
 
         res = RoleEngine.resolve_night(self.players, self.lang)
+        cakir_kills = []
+        if not getattr(self, "_omer_silence", False):
+            for uid, player in self.players.items():
+                target_id = player.night_target
+                if player.is_alive and player.role == Role.CAKIR and player.has_acted and target_id in self.players:
+                    target = self.players[target_id]
+                    if target.is_alive and target_id not in res.killed and target_id not in res.healed:
+                        target.is_alive = False
+                        res.killed.append(target_id)
+                        cakir_kills.append(target_id)
+        for player in self.players.values():
+            if not player.is_alive and player.role == Role.ELIF_EYLUL and player.ship_partner in self.players:
+                partner = self.players[player.ship_partner]
+                if partner.is_alive:
+                    partner.is_alive = False
+                    if partner.user_id not in res.killed:
+                        res.killed.append(partner.user_id)
         lines = [get_text(self.lang, "dawn") + "\n"]
+        for victim_id in cakir_kills:
+            victim = self.players[victim_id]
+            lines.append(f"🥃 Süleyman Çakır Racon değil kafa kesti: <b>{html.escape(victim.name)}</b> — {html.escape(get_role_text(self.lang, victim.role.value)[0])}")
 
         if not res.killed:
             lines.append(get_text(self.lang, "nobody_died"))
@@ -1134,11 +1219,15 @@ class Game:
         ]
         buttons.append([InlineKeyboardButton(get_text(self.lang, "vote_skip"), callback_data="vote:skip")])
 
-        await self.send(
-            self.chat_id,
-            get_text(self.lang, "voting_started", seconds=VOTE_TIMEOUT),
-            markup=InlineKeyboardMarkup(buttons)
-        )
+        if self.app is not None:
+            try:
+                vote_msg = await self.app.bot.send_message(chat_id=self.chat_id, text=get_text(self.lang, "voting_started", seconds=VOTE_TIMEOUT), reply_markup=InlineKeyboardMarkup(buttons))
+                self._vote_message_id = vote_msg.message_id
+            except TelegramError as exc:
+                log.warning("Oylama mesajı gönderilemedi: %s", exc)
+                self._vote_message_id = None
+        else:
+            await self.send(self.chat_id, get_text(self.lang, "voting_started", seconds=VOTE_TIMEOUT), markup=InlineKeyboardMarkup(buttons))
         if self.phase != Phase.VOTING:
             return
 
@@ -1182,6 +1271,11 @@ class Game:
             return get_text(display_lang, "invalid_target")
         if voter == target:
             return get_text(display_lang, "self_vote")
+        if vp.role == Role.DELI_HIKMET:
+            choices = [x.user_id for x in self.alive() if x.user_id != voter]
+            if choices:
+                target = random.choice(choices)
+                tp = self.players[target]
         prev = self.votes.prev(voter)
         self.votes.cast(voter, target)
         if prev and prev != target and prev in self.players:
@@ -1196,6 +1290,12 @@ class Game:
         if self.phase != Phase.VOTING or self._resolving_vote:
             return
         self._resolving_vote = True
+        if self._vote_message_id and self.app is not None:
+            try:
+                await self.app.bot.delete_message(chat_id=self.chat_id, message_id=self._vote_message_id)
+            except TelegramError as exc:
+                log.warning("Oylama mesajı silinemedi: %s", exc)
+            self._vote_message_id = None
         log.info("Oylama çözülüyor: game=%s players_alive=%s", self.game_id, len(self.alive()))
 
         tally = self.votes.tally()
@@ -1664,6 +1764,10 @@ async def send_night_dm(app: Application, game: Game, uid: int) -> None:
     ]
     if p.role == Role.SHIFOKOR:
         alive_targets.insert(0, (uid, f"{p.name[:36]} (kendin)"))
+    if p.role == Role.CAKIR and game.round - p.last_special_round < 2:
+        return
+    if p.role == Role.ELIF_EYLUL and p.ship_partner is not None:
+        return
 
     player_lang = await db.get_language(uid)
     verb = get_text(player_lang, "night_action_" + p.role.value)
