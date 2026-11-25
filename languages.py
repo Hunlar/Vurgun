@@ -116,6 +116,9 @@ ROLE_TEXTS = {
         "guvoh": ("Abdülhey Çoban", "Her gece bir oyuncuyu takip eder, gece yaptığı hareket hakkında bilgi edinirsin."),
         "kamikaze": ("Memati Baş", "Gündüz oylamasıyla elenirsen yanında rastgele bir oyuncuyu da götürürsün."),
         "suicid": ("Hain", "Gündüz oylamasıyla elenirsen kendi zaferini kazanırsın."),
+        "elif_eylul": ("Elif Eylül", "Gece özel mesajındaki düğmelerden gemi arkadaşını seç. Sen ölürsen o da ölür."),
+        "omer_baba": ("Ömer Baba", "İki gecede bir tüm gece yeteneklerini devre dışı bırakır."),
+        "deli_hikmet": ("Deli Hikmet", "Oylamada seçtiğin isim yerine sistem rastgele bir oyuncuya oy verir."),
     },
     "en": {
         "fuqaro": ("The People", "You have no special ability. Find the Council members and eliminate them by daytime vote."),
