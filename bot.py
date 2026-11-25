@@ -132,8 +132,11 @@ DEATH_SCENE_IMAGES = [
 
 def death_image_for(role: "Role", cause: str) -> str:
     """Select a scene by elimination cause and character faction."""
+    # Baron'un ölümü her durumda kendine ait Templar sahnesiyle duyurulur.
+    if role == Role.DON:
+        return BARON_TEMPLAR_DEATH_IMAGE
     if cause == "vote":
-        return BARON_TEMPLAR_DEATH_IMAGE if role == Role.DON else TEMPLAR_VOTE_IMAGE
+        return TEMPLAR_VOTE_IMAGE
     if role == Role.MAFIA:
         return random.choice(COUNCIL_DEATH_IMAGES)
     return random.choice(DEATH_SCENE_IMAGES)
@@ -1065,6 +1068,16 @@ class Game:
 
         if self.phase != Phase.NIGHT:
             return
+
+        # Baron herhangi bir gece etkisiyle elendiyse oyun anında biter.
+        # Halk sonucu, rol açıklaması ve final duyurusu grup sohbetine gönderilir.
+        baron = next((p for p in self.players.values()
+                      if p.role == Role.DON and not p.is_alive), None)
+        if baron is not None:
+            log.info("Baron Mehmet Karahanlı gece elendi; Halk kazandı: game=%s", self.game_id)
+            await self._end_game("town")
+            return
+
         winner = RoleEngine.check_win(self.players)
         if winner:
             winner_id = RoleEngine.last_standing_winner_id(self.players)
