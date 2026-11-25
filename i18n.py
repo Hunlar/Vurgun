@@ -14,6 +14,7 @@ _API_KEY = os.environ.get("GOOGLE_TRANSLATE_API_KEY", "").strip()
 _CACHE: dict[tuple[str, str, str], str] = {}
 _CACHE_LOCK = asyncio.Lock()
 _CLIENT: Optional[httpx.AsyncClient] = None
+_BASE_LANGS = {"tr", "en", "ru", "uz", "ar", "de"}
 
 LANGUAGE_ALIASES = {
     "az": "az", "az-az": "az", "fa": "fa", "fa-ir": "fa",
@@ -27,8 +28,10 @@ def normalize_language(code: str) -> str:
         return LANGUAGE_ALIASES[code]
     return code.split("-", 1)[0] if code else "tr"
 
-async def google_translate(text: str, target_lang: str, source_lang: str = "tr") -> str:
+async def google_translate(text: str, target_lang: str, source_lang: str = "tr", force: bool = False) -> str:
     if not text or not target_lang or target_lang == source_lang or not _API_KEY:
+        return text
+    if target_lang in _BASE_LANGS and not force:
         return text
     key = (source_lang, target_lang, text)
     async with _CACHE_LOCK:
@@ -56,7 +59,7 @@ async def google_translate(text: str, target_lang: str, source_lang: str = "tr")
         return text
 
 async def translate_markup(markup, target_lang: str):
-    if markup is None or not _API_KEY or target_lang == "tr":
+    if markup is None or not _API_KEY or target_lang in _BASE_LANGS:
         return markup
     rows = []
     for row in markup.inline_keyboard:
