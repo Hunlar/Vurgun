@@ -105,6 +105,9 @@ ROLE_IMAGES = {
     "kamikaze": "https://i1.sndcdn.com/artworks-000069787979-c3vbuc-t1080x1080.jpg",
     "cakir": "https://media.cumhuriyet.com.tr/Archive/2021/4/16/1828754/kapak_224317.jpg",
     "suicid": "https://cdn.karar.com/news/1389096.jpg",
+    "elif_eylul": "https://4.bp.blogspot.com/-7lSExFqNf-c/T_7Tfw40wMI/AAAAAAAAGuE/N2Y2YAEsXSE/s1600/741.jpg",
+    "omer_baba": "https://www.yurtgazetesi.com.tr/d/other/2024/07/11/4e960baf-728xauto-elqf.jpg",
+    "deli_hikmet": "https://imgrosetta.mynet.com.tr/file/13368780/728xauto.jpg",
 }
 
 # Ölüm görselleri: seçimle infaz ve gece öldürülmesi ayrı ele alınır.
@@ -113,6 +116,7 @@ TEMPLAR_VOTE_IMAGE = (
     "https://seyler.ekstat.com/img/max/800/8/8pidqdHBsBRlKneV-637316228192728472.jpg"
 )
 BARON_TEMPLAR_DEATH_IMAGE = "https://img.youtube.com/vi/eziAMoyvX64/hqdefault.jpg"
+KIZ_KULESI_DEATH_IMAGE = "https://images.unsplash.com/photo-1665850420721-ccdfac5d7c23?auto=format&fit=crop&fm=jpg&q=85&w=1600"
 COUNCIL_DEATH_IMAGES = [
     "https://galeri13.uludagsozluk.com/726/iplikci-nedim_1281287.jpg",
     "https://galeri13.uludagsozluk.com/678/nizamettin-guvenc_1291207_m.jpg",
@@ -1106,7 +1110,11 @@ class Game:
             death_caption = death_text
             if self.lang == "tr":
                 death_caption += "\n\n" + random.choice(quips)
-            image = death_image_for(p.role, "night")
+            is_ship_partner = any(
+                owner.role == Role.ELIF_EYLUL and owner.ship_partner == uid
+                for owner in self.players.values()
+            )
+            image = KIZ_KULESI_DEATH_IMAGE if p.role == Role.ELIF_EYLUL or is_ship_partner else death_image_for(p.role, "night")
             sent = False
             if self.app is not None and image:
                 try:
