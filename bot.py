@@ -12,6 +12,7 @@ import logging
 import html
 import re
 import os
+import httpx
 import random
 import sys
 import uuid
@@ -71,6 +72,48 @@ OWNER_IDS = {
 }
 
 SUPPORT_URL = os.environ.get("SUPPORT_URL", "").strip()
+GOOGLE_TRANSLATE_API_KEY = os.environ.get("GOOGLE_TRANSLATE_API_KEY", "").strip()
+_TRANSLATION_CACHE: dict[tuple[str, str], str] = {}
+
+async def google_translate(text: str, target_lang: str) -> str:
+    if not text or target_lang not in ("az", "fa") or not GOOGLE_TRANSLATE_API_KEY:
+        return text
+    key = (target_lang, text)
+    if key in _TRANSLATION_CACHE:
+        return _TRANSLATION_CACHE[key]
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            response = await client.post(
+                "https://translation.googleapis.com/language/translate/v2",
+                params={"key": GOOGLE_TRANSLATE_API_KEY},
+                json={"q": text, "source": "tr", "target": target_lang, "format": "html"},
+            )
+            response.raise_for_status()
+            translated = response.json()["data"]["translations"][0]["translatedText"]
+            _TRANSLATION_CACHE[key] = translated
+            return translated
+    except Exception as exc:
+        log.warning("Google Translate error (%s): %s", target_lang, exc)
+        return text
+
+async def translate_markup(markup, target_lang: str):
+    if markup is None or target_lang not in ("az", "fa") or not GOOGLE_TRANSLATE_API_KEY:
+        return markup
+    rows = []
+    for row in markup.inline_keyboard:
+        out = []
+        for button in row:
+            label = await google_translate(button.text, target_lang) if button.text else button.text
+            out.append(InlineKeyboardButton(
+                text=label, url=button.url, callback_data=button.callback_data,
+                web_app=button.web_app, login_url=button.login_url,
+                switch_inline_query=button.switch_inline_query,
+                switch_inline_query_current_chat=button.switch_inline_query_current_chat,
+                callback_game=button.callback_game, pay=button.pay,
+            ))
+        rows.append(out)
+    return InlineKeyboardMarkup(rows)
+
 
 
 def get_role_text(lang: str, role: str) -> tuple[str, str]:
@@ -1230,13 +1273,15 @@ class Game:
 
         if self.app is not None:
             try:
-                vote_msg = await self.app.bot.send_message(chat_id=self.chat_id, text=get_text(self.lang, "voting_started", seconds=VOTE_TIMEOUT), reply_markup=InlineKeyboardMarkup(buttons))
+                vote_text = await google_translate(get_text(self.lang, "voting_started", seconds=VOTE_TIMEOUT), self.lang)
+                vote_msg = await self.app.bot.send_message(chat_id=self.chat_id, text=vote_text, reply_markup=InlineKeyboardMarkup(buttons))
                 self._vote_message_id = vote_msg.message_id
             except TelegramError as exc:
                 log.warning("Oylama mesajı gönderilemedi: %s", exc)
                 self._vote_message_id = None
         else:
-            await self.send(self.chat_id, get_text(self.lang, "voting_started", seconds=VOTE_TIMEOUT), markup=InlineKeyboardMarkup(buttons))
+            vote_text = await google_translate(get_text(self.lang, "voting_started", seconds=VOTE_TIMEOUT), self.lang)
+            await self.send(self.chat_id, vote_text, markup=InlineKeyboardMarkup(buttons))
         if self.phase != Phase.VOTING:
             return
 
@@ -1442,6 +1487,8 @@ class Game:
         p.is_alive = False
         role_name, _ = get_role_text(self.lang, p.role.value)
         msg = get_text(self.lang, "player_eliminated", name=html.escape(p.name), role=html.escape(role_name))
+        if p.role == Role.DON:
+            msg += "\n\n👑 Baron Mehmet Karahanlı oylamayla öldürüldü! 🏙 Halk kazandı."
         if p.role == Role.ELIF_EYLUL and p.ship_partner in self.players:
             partner = self.players[p.ship_partner]
             if partner.is_alive:
@@ -1738,6 +1785,10 @@ reg = Registry()
 async def safe_send(app: Application, chat_id: int, text: str,
                     markup: Optional[InlineKeyboardMarkup] = None) -> None:
     try:
+        target_lang = await db.get_group_language(chat_id) if chat_id < 0 else await db.get_language(chat_id)
+        if target_lang in ("az", "fa") and GOOGLE_TRANSLATE_API_KEY:
+            text = await google_translate(text, target_lang)
+            markup = await translate_markup(markup, target_lang)
         await app.bot.send_message(
             chat_id=chat_id, text=text,
             parse_mode=ParseMode.HTML,
