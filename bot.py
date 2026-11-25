@@ -76,7 +76,7 @@ GOOGLE_TRANSLATE_API_KEY = os.environ.get("GOOGLE_TRANSLATE_API_KEY", "").strip(
 _TRANSLATION_CACHE: dict[tuple[str, str], str] = {}
 
 async def google_translate(text: str, target_lang: str) -> str:
-    if not text or target_lang not in ("az", "fa") or not GOOGLE_TRANSLATE_API_KEY:
+    if not text or target_lang in ("tr", "en", "ru", "uz", "ar", "de") or not GOOGLE_TRANSLATE_API_KEY:
         return text
     key = (target_lang, text)
     if key in _TRANSLATION_CACHE:
@@ -97,7 +97,7 @@ async def google_translate(text: str, target_lang: str) -> str:
         return text
 
 async def translate_markup(markup, target_lang: str):
-    if markup is None or target_lang not in ("az", "fa") or not GOOGLE_TRANSLATE_API_KEY:
+    if markup is None or target_lang in ("tr", "en", "ru", "uz", "ar", "de") or not GOOGLE_TRANSLATE_API_KEY:
         return markup
     rows = []
     for row in markup.inline_keyboard:
@@ -1791,7 +1791,7 @@ async def safe_send(app: Application, chat_id: int, text: str,
                     markup: Optional[InlineKeyboardMarkup] = None) -> None:
     try:
         target_lang = await db.get_group_language(chat_id) if chat_id < 0 else await db.get_language(chat_id)
-        if target_lang in ("az", "fa") and GOOGLE_TRANSLATE_API_KEY:
+        if target_lang not in ("tr", "en", "ru", "uz", "ar", "de") and GOOGLE_TRANSLATE_API_KEY:
             text = await google_translate(text, target_lang)
             markup = await translate_markup(markup, target_lang)
         await app.bot.send_message(
