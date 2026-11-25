@@ -1088,13 +1088,19 @@ class Game:
                         target.is_alive = False
                         res.killed.append(target_id)
                         cakir_kills.append(target_id)
+        # Gemi bağı çift yönlüdür: Elif ölürse partneri, partner ölürse Elif de ölür.
         for player in self.players.values():
-            if not player.is_alive and player.role == Role.ELIF_EYLUL and player.ship_partner in self.players:
-                partner = self.players[player.ship_partner]
-                if partner.is_alive:
-                    partner.is_alive = False
-                    if partner.user_id not in res.killed:
-                        res.killed.append(partner.user_id)
+            if player.role != Role.ELIF_EYLUL or player.ship_partner not in self.players:
+                continue
+            partner = self.players[player.ship_partner]
+            if not player.is_alive and partner.is_alive:
+                partner.is_alive = False
+                if partner.user_id not in res.killed:
+                    res.killed.append(partner.user_id)
+            elif player.is_alive and not partner.is_alive:
+                player.is_alive = False
+                if player.user_id not in res.killed:
+                    res.killed.append(player.user_id)
         lines = [get_text(self.lang, "dawn") + "\n"]
         for victim_id in cakir_kills:
             victim = self.players[victim_id]
@@ -1459,27 +1465,38 @@ class Game:
         msg = get_text(self.lang, "player_eliminated", name=html.escape(p.name), role=html.escape(role_name))
         if p.role == Role.DON:
             msg += "\n\n👑 Baron Mehmet Karahanlı oylamayla öldürüldü! 🏙 Halk kazandı."
-        if p.role == Role.ELIF_EYLUL and p.ship_partner in self.players:
-            partner = self.players[p.ship_partner]
-            if partner.is_alive:
-                partner.is_alive = False
-                msg += f"\n\n🚢 Elif Eylül ile gemi arkadaşı <b>{html.escape(partner.name)}</b> birlikte Kız Kulesi'ne veda etti."
 
         if kamikaze_extra and self.players.get(kamikaze_extra):
             victim = self.players[kamikaze_extra]
             victim.is_alive = False
             msg += "\n\n" + get_text(self.lang, "kamikaze_hit", victim=html.escape(victim.name))
 
+        # Gemi bağı iki yönlü çalışır ve oy, Çakır veya Kamikaze ölümü dahil
+        # hangi nedenle olursa olsun eşlerden biri ölürse diğeri de elenir.
+        ship_eliminated = []
+        for owner in self.players.values():
+            if owner.role != Role.ELIF_EYLUL or owner.ship_partner not in self.players:
+                continue
+            partner = self.players[owner.ship_partner]
+            if not owner.is_alive and partner.is_alive:
+                partner.is_alive = False
+                ship_eliminated.append(partner)
+            elif owner.is_alive and not partner.is_alive:
+                owner.is_alive = False
+                ship_eliminated.append(owner)
+        for linked in ship_eliminated:
+            msg += f"\n\n🚢 Gemi bağı nedeniyle <b>{html.escape(linked.name)}</b> de Kız Kulesi'ne veda etti. Rolü: <b>{html.escape(get_role_text(self.lang, linked.role.value)[0])}</b>"
+
         await self.send(self.chat_id, msg)
         if self.phase != Phase.DEFENSE:
             self._executing_vote = False
             return
         if self.app is not None:
-            eliminated_players = [p]
-            if p.role == Role.ELIF_EYLUL and p.ship_partner in self.players:
-                eliminated_players.append(self.players[p.ship_partner])
+            eliminated_players = [p] + ship_eliminated
             if kamikaze_extra and self.players.get(kamikaze_extra):
-                eliminated_players.append(self.players[kamikaze_extra])
+                extra = self.players[kamikaze_extra]
+                if extra not in eliminated_players:
+                    eliminated_players.append(extra)
             for eliminated in eliminated_players:
                 try:
                     ship_partner_death = any(
