@@ -19,6 +19,23 @@ LANGUAGES = {
     "it": "🇮🇹 Italiano",
     "pt": "🇵🇹 Português",
     "zh-CN": "🇨🇳 中文",
+    "ja": "🇯🇵 日本語",
+    "ko": "🇰🇷 한국어",
+    "nl": "🇳🇱 Nederlands",
+    "pl": "🇵🇱 Polski",
+    "uk": "🇺🇦 Українська",
+    "id": "🇮🇩 Bahasa Indonesia",
+    "vi": "🇻🇳 Tiếng Việt",
+    "th": "🇹🇭 ไทย",
+    "bn": "🇧🇩 বাংলা",
+    "el": "🇬🇷 Ελληνικά",
+    "ro": "🇷🇴 Română",
+    "sv": "🇸🇪 Svenska",
+    "da": "🇩🇰 Dansk",
+    "no": "🇳🇴 Norsk",
+    "he": "🇮🇱 עברית",
+    "ms": "🇲🇾 Bahasa Melayu",
+    "fil": "🇵🇭 Filipino",
 }
 
 TEXTS = {
