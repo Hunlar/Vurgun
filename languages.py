@@ -10,6 +10,15 @@ LANGUAGES = {
     "de": "🇩🇪 Deutsch",
     "az": "🇦🇿 Azərbaycanca",
     "fa": "🇮🇷 فارسی",
+    "kk": "🇰🇿 Қазақша",
+    "ky": "🇰🇬 Кыргызча",
+    "ur": "🇵🇰 اردو",
+    "hi": "🇮🇳 हिन्दी",
+    "fr": "🇫🇷 Français",
+    "es": "🇪🇸 Español",
+    "it": "🇮🇹 Italiano",
+    "pt": "🇵🇹 Português",
+    "zh-CN": "🇨🇳 中文",
 }
 
 TEXTS = {
