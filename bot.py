@@ -928,15 +928,14 @@ class Game:
             for p in self.players.values():
                 if p.is_alive and p.role == Role.OMER_BABA:
                     p.has_acted = True
+        for p in self.players.values():
+            if p.is_alive and p.role == Role.ELIF_EYLUL and p.ship_partner is not None:
+                p.has_acted = True
+            if p.is_alive and p.role == Role.CAKIR and self.round - p.last_special_round < 2:
+                p.has_acted = True
         if self.app is not None and not self._omer_silence:
             for p in self.players.values():
-                if p.is_alive and not p.is_ai and p.user_id > 0 and p.role.has_night_action:
-                    if p.role == Role.ELIF_EYLUL and p.ship_partner is not None:
-                        p.has_acted = True
-                        continue
-                    if p.role == Role.CAKIR and self.round - p.last_special_round < 2:
-                        p.has_acted = True
-                        continue
+                if p.is_alive and not p.is_ai and p.user_id > 0 and p.role.has_night_action and not p.has_acted:
                     await send_night_dm(self.app, self, p.user_id)
 
         await self.send(
@@ -958,6 +957,8 @@ class Game:
             self._task = asyncio.create_task(self._night_timeout())
 
     async def _ai_night(self) -> None:
+        if getattr(self, "_omer_silence", False):
+            return
         alive_others_ids = [uid for uid, p in self.players.items() if p.is_alive]
 
         async def choose_target(uid: int, player: Player) -> None:
@@ -971,13 +972,19 @@ class Game:
                 )
             ]
             if candidates:
-                player.night_target = random.choice(candidates)
+                chosen = random.choice(candidates)
+                if player.role == Role.ELIF_EYLUL and player.ship_partner is None:
+                    player.ship_partner = chosen
+                elif player.role != Role.ELIF_EYLUL:
+                    player.night_target = chosen
             player.has_acted = True
 
         tasks = [
             choose_target(uid, player)
             for uid, player in self.players.items()
             if player.is_alive and player.is_ai and player.role.has_night_action
+            and not (player.role == Role.CAKIR and self.round - player.last_special_round < 2)
+            and not (player.role == Role.ELIF_EYLUL and player.ship_partner is not None)
         ]
         if tasks:
             await asyncio.gather(*tasks)
