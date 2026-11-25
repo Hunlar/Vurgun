@@ -2190,7 +2190,7 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "⭐ Projeye destek: <b>Stars</b> menüsü"
     )
     if lang not in ("tr", "en", "ru", "uz", "ar", "de"):
-        help_text = await google_translate(help_text, lang)
+        help_text = await google_translate(help_text, lang, force=(lang != "tr"))
     help_markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("🎭 RP MODELS", callback_data="rp_models")],
         [InlineKeyboardButton("⭐ Stars ile destek ol", callback_data="donate_menu")],
@@ -2226,7 +2226,7 @@ async def cmd_successful_payment(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
         return
     lang = await db.get_language(update.effective_user.id)
     thanks = "⭐ Desteğin için çok teşekkür ederiz! Katkın KVP GAME'in gelişmesine yardımcı oluyor."
-    thanks = await google_translate(thanks, lang)
+    thanks = await google_translate(thanks, lang, force=(lang != "tr"))
     await update.effective_message.reply_text(thanks)
 
 
@@ -2604,7 +2604,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 "Rol açıklamaları için RP MODELS bölümünü aç."
             )
             if help_lang not in ("tr", "en", "ru", "uz", "ar", "de"):
-                help_text = await google_translate(help_text, help_lang)
+                help_text = await google_translate(help_text, help_lang, force=(help_lang != "tr"))
             await q.answer()
             help_markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🎭 RP MODELS", callback_data="rp_models")],
@@ -2620,7 +2620,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             role_text = roles_catalog_text()
             role_lang = await db.get_group_language(cid) if q.message and q.message.chat.type in ("group", "supergroup") else await db.get_language(uid)
             if role_lang not in ("tr", "en", "ru", "uz", "ar", "de"):
-                role_text = await google_translate(role_text, role_lang)
+                role_text = await google_translate(role_text, role_lang, force=(role_lang != "tr"))
             await q.answer()
             role_markup = InlineKeyboardMarkup([[InlineKeyboardButton("↩️ Ana menü", callback_data="back_main")]])
             await edit_callback_message(
@@ -2637,7 +2637,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 "Telegram Stars ile gönüllü katkıda bulunabilirsin. "
                 "Desteğin geliştirme ve sunucu giderlerine yardımcı olur."
             )
-            donation_text = await google_translate(donation_text, donation_lang)
+            donation_text = await google_translate(donation_text, donation_lang, force=(donation_lang != "tr"))
             await edit_callback_message(
                 q, donation_text, parse_mode=ParseMode.HTML,
                 reply_markup=await translate_markup(donation_kb(), donation_lang)
