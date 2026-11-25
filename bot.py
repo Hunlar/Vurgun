@@ -2189,8 +2189,7 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "🎭 Roller ve yetenekler: <b>RP MODELS</b>\n"
         "⭐ Projeye destek: <b>Stars</b> menüsü"
     )
-    if lang not in ("tr", "en", "ru", "uz", "ar", "de"):
-        help_text = await google_translate(help_text, lang, force=(lang != "tr"))
+    help_text = await google_translate(help_text, lang, force=(lang != "tr"))
     help_markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("🎭 RP MODELS", callback_data="rp_models")],
         [InlineKeyboardButton("⭐ Stars ile destek ol", callback_data="donate_menu")],
@@ -2603,8 +2602,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 "<b>Ayarlar:</b> /language • /grouplanguage\n\n"
                 "Rol açıklamaları için RP MODELS bölümünü aç."
             )
-            if help_lang not in ("tr", "en", "ru", "uz", "ar", "de"):
-                help_text = await google_translate(help_text, help_lang, force=(help_lang != "tr"))
+            help_text = await google_translate(help_text, help_lang, force=(help_lang != "tr"))
             await q.answer()
             help_markup = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🎭 RP MODELS", callback_data="rp_models")],
@@ -2619,8 +2617,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         elif data == "rp_models":
             role_text = roles_catalog_text()
             role_lang = await db.get_group_language(cid) if q.message and q.message.chat.type in ("group", "supergroup") else await db.get_language(uid)
-            if role_lang not in ("tr", "en", "ru", "uz", "ar", "de"):
-                role_text = await google_translate(role_text, role_lang, force=(role_lang != "tr"))
+            role_text = await google_translate(role_text, role_lang, force=(role_lang != "tr"))
             await q.answer()
             role_markup = InlineKeyboardMarkup([[InlineKeyboardButton("↩️ Ana menü", callback_data="back_main")]])
             await edit_callback_message(
