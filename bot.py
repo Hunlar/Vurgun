@@ -285,17 +285,17 @@ def build_role_list(n: int) -> list[Role]:
     if n == 4:
         return [Role.DON, Role.KOMISSAR, Role.CAKIR, Role.FUQARO]
     elif n == 5:
-        return [Role.DON, Role.MAFIA, Role.KOMISSAR, Role.CAKIR, Role.FUQARO]
+        return [Role.DON, Role.MAFIA, Role.KOMISSAR, Role.CAKIR, Role.DELI_HIKMET]
     elif n == 6:
-        return [Role.DON, Role.MAFIA, Role.KOMISSAR, Role.SHIFOKOR, Role.CAKIR, Role.FUQARO]
+        return [Role.DON, Role.MAFIA, Role.KOMISSAR, Role.SHIFOKOR, Role.CAKIR, Role.ELIF_EYLUL]
     elif n == 7:
-        return [Role.DON, Role.MAFIA, Role.KOMISSAR, Role.SHIFOKOR, Role.GUVOH, Role.CAKIR, Role.FUQARO]
+        return [Role.DON, Role.MAFIA, Role.KOMISSAR, Role.SHIFOKOR, Role.GUVOH, Role.CAKIR, Role.OMER_BABA]
     elif n == 8:
-        return [Role.DON, Role.MAFIA, Role.KOMISSAR, Role.SHIFOKOR, Role.GUVOH, Role.KAMIKAZE, Role.CAKIR, Role.FUQARO]
+        return [Role.DON, Role.MAFIA, Role.KOMISSAR, Role.SHIFOKOR, Role.GUVOH, Role.KAMIKAZE, Role.CAKIR, Role.ELIF_EYLUL]
     elif n == 9:
-        return [Role.DON, Role.MAFIA, Role.MAFIA, Role.KOMISSAR, Role.SHIFOKOR, Role.GUVOH, Role.KAMIKAZE, Role.CAKIR, Role.FUQARO]
+        return [Role.DON, Role.MAFIA, Role.MAFIA, Role.KOMISSAR, Role.SHIFOKOR, Role.GUVOH, Role.KAMIKAZE, Role.CAKIR, Role.OMER_BABA]
     elif n == 10:
-        return [Role.DON, Role.MAFIA, Role.MAFIA, Role.KOMISSAR, Role.SHIFOKOR, Role.GUVOH, Role.KAMIKAZE, Role.SUICID, Role.CAKIR, Role.FUQARO]
+        return [Role.DON, Role.MAFIA, Role.MAFIA, Role.KOMISSAR, Role.SHIFOKOR, Role.GUVOH, Role.KAMIKAZE, Role.SUICID, Role.CAKIR, Role.ELIF_EYLUL]
     else:
         mafia_n = max(2, n // 4)
         roles = [Role.DON] + [Role.MAFIA] * mafia_n
@@ -890,16 +890,8 @@ class Game:
                     log.warning("Rol DM yuborilmadi (%s): %s", player.user_id, exc)
                     missing_dm.append(player.name)
         await self._begin_night()
-        # Night state is fully initialized before action buttons are sent, avoiding a race
-        # where a fast player action could be reset by the night initializer.
         if self.app is not None and self.phase == Phase.NIGHT:
-            for player_uid in delivered_dm:
-                if self.phase != Phase.NIGHT:
-                    break
-                player = self.players.get(player_uid)
-                if player and player.role.has_night_action and player.is_alive:
-                    await send_night_dm(self.app, self, player_uid)
-            if missing_dm and self.phase == Phase.NIGHT:
+            if missing_dm:
                 try:
                     me = await self.app.bot.get_me()
                     start_link = f"https://t.me/{me.username}?start=play"
@@ -1433,6 +1425,11 @@ class Game:
         p.is_alive = False
         role_name, _ = get_role_text(self.lang, p.role.value)
         msg = get_text(self.lang, "player_eliminated", name=html.escape(p.name), role=html.escape(role_name))
+        if p.role == Role.ELIF_EYLUL and p.ship_partner in self.players:
+            partner = self.players[p.ship_partner]
+            if partner.is_alive:
+                partner.is_alive = False
+                msg += f"\n\n🚢 Elif Eylül ile gemi arkadaşı <b>{html.escape(partner.name)}</b> birlikte Kız Kulesi'ne veda etti."
 
         if kamikaze_extra and self.players.get(kamikaze_extra):
             victim = self.players[kamikaze_extra]
@@ -1445,6 +1442,8 @@ class Game:
             return
         if self.app is not None:
             eliminated_players = [p]
+            if p.role == Role.ELIF_EYLUL and p.ship_partner in self.players:
+                eliminated_players.append(self.players[p.ship_partner])
             if kamikaze_extra and self.players.get(kamikaze_extra):
                 eliminated_players.append(self.players[kamikaze_extra])
             for eliminated in eliminated_players:
@@ -1770,7 +1769,11 @@ async def send_night_dm(app: Application, game: Game, uid: int) -> None:
         return
 
     player_lang = await db.get_language(uid)
-    verb = get_text(player_lang, "night_action_" + p.role.value)
+    special_verbs = {
+        Role.ELIF_EYLUL: "Gemi arkadaşını seç",
+        Role.CAKIR: "İki gecede bir hedef seç ve öldür",
+    }
+    verb = special_verbs.get(p.role, get_text(player_lang, "night_action_" + p.role.value))
     buttons = [
         [InlineKeyboardButton(get_text(player_lang, "select_target", name=name), callback_data=f"night:{game.game_id}:{uid2}")]
         for uid2, name in alive_targets
