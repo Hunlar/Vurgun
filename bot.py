@@ -139,6 +139,8 @@ def death_image_for(role: "Role", cause: str) -> str:
     # Baron'un ölümü her durumda kendine ait Templar sahnesiyle duyurulur.
     if role == Role.DON:
         return BARON_TEMPLAR_DEATH_IMAGE
+    if role == Role.ELIF_EYLUL:
+        return KIZ_KULESI_DEATH_IMAGE
     if cause == "vote":
         return TEMPLAR_VOTE_IMAGE
     if role == Role.MAFIA:
@@ -1463,9 +1465,14 @@ class Game:
                 eliminated_players.append(self.players[kamikaze_extra])
             for eliminated in eliminated_players:
                 try:
+                    ship_partner_death = any(
+                        owner.role == Role.ELIF_EYLUL and owner.ship_partner == eliminated.user_id
+                        for owner in self.players.values()
+                    )
+                    scene = KIZ_KULESI_DEATH_IMAGE if ship_partner_death else death_image_for(eliminated.role, "vote" if eliminated is p else "night")
                     await self.app.bot.send_photo(
                         chat_id=self.chat_id,
-                        photo=death_image_for(eliminated.role, "vote" if eliminated is p else "night"),
+                        photo=scene,
                         caption=(f"⚰️ <b>{html.escape(eliminated.name)}</b> oyunun dışında kaldı.\n"
                                  f"🎭 {html.escape(get_role_text(self.lang, eliminated.role.value)[0])}"),
                         parse_mode=ParseMode.HTML
