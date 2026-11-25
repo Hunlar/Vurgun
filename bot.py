@@ -1521,11 +1521,13 @@ class Game:
                         for owner in self.players.values()
                     )
                     scene = KIZ_KULESI_DEATH_IMAGE if ship_partner_death else death_image_for(eliminated.role, "vote" if eliminated is p else "night")
+                    scene_caption = (f"⚰️ <b>{html.escape(eliminated.name)}</b> oyunun dışında kaldı.\n"
+                                     f"🎭 {html.escape(get_role_text(self.lang, eliminated.role.value)[0])}")
+                    scene_caption = await google_translate(scene_caption, self.lang)
                     await self.app.bot.send_photo(
                         chat_id=self.chat_id,
                         photo=scene,
-                        caption=(f"⚰️ <b>{html.escape(eliminated.name)}</b> oyunun dışında kaldı.\n"
-                                 f"🎭 {html.escape(get_role_text(self.lang, eliminated.role.value)[0])}"),
+                        caption=scene_caption,
                         parse_mode=ParseMode.HTML
                     )
                 except Exception as exc:
@@ -1859,11 +1861,13 @@ async def send_night_dm(app: Application, game: Game, uid: int) -> None:
     buttons.append([InlineKeyboardButton(get_text(player_lang, "skip_action"), callback_data=f"night:{game.game_id}:skip")])
 
     try:
+        night_text = await google_translate(get_text(player_lang, "night_action_title", action=verb), player_lang)
+        night_markup = await translate_markup(InlineKeyboardMarkup(buttons), player_lang)
         await app.bot.send_message(
             chat_id=uid,
-            text=get_text(player_lang, "night_action_title", action=verb),
+            text=night_text,
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(buttons),
+            reply_markup=night_markup,
         )
     except TelegramError as e:
         log.warning("Night DM fail %s: %s", uid, e)
