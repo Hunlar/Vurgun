@@ -18,7 +18,7 @@ _CLIENT: Optional[httpx.AsyncClient] = None
 LANGUAGE_ALIASES = {
     "az": "az", "az-az": "az", "fa": "fa", "fa-ir": "fa",
     "pt-br": "pt", "zh": "zh-CN", "zh-cn": "zh-CN", "zh-hans": "zh-CN",
-    "zh-tw": "zh-TW", "he": "iw", "fil": "tl", "nb": "no",
+    "zh-tw": "zh-TW", "he": "he", "fil": "tl", "nb": "no",
 }
 
 def normalize_language(code: str) -> str:
