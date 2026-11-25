@@ -2917,30 +2917,23 @@ async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 # ══════════════════════════════════════════════════════════════════
 async def post_init(app: Application) -> None:
     await db.connect()
+    # Keep Telegram's command menu intentionally short; advanced commands remain usable.
     tr_commands = [
-        BotCommand("start", "Botu başlat"),
-        BotCommand("newgame", "Yeni oyun lobisi aç"),
-        BotCommand("join", "Oyuna katıl"),
+        BotCommand("start", "Ana menüyü aç"),
+        BotCommand("help", "Kısa yardım ve oyun kuralları"),
+        BotCommand("newgame", "Grupta yeni oyun başlat"),
+        BotCommand("join", "Açık oyuna katıl"),
         BotCommand("leave", "Lobiden ayrıl"),
-        BotCommand("startgame", "Oyunu başlat (kurucu/yönetici)"),
-        BotCommand("endgame", "Oyunu bitir (kurucu/yönetici)"),
-        BotCommand("players", "Oyuncu listesini göster"),
-        BotCommand("myrole", "Kendi rolünü göster"),
-        BotCommand("stats", "İstatistikleri göster"),
-        BotCommand("help", "Yardım ve oyun kuralları"),
-        BotCommand("language", "Kişisel dili değiştir"),
-        BotCommand("grouplanguage", "Grup dilini değiştir (yönetici)"),
-        BotCommand("admin", "Yönetici komutları"),
-        BotCommand("panel", "Bot sahibi yönetim paneli"),
+        BotCommand("language", "Dil seçimi"),
     ]
     await app.bot.set_my_commands(tr_commands)
     await app.bot.set_my_commands(tr_commands, language_code="tr")
     command_sets = {
-        "en": [BotCommand("start", "Start bot"), BotCommand("newgame", "Create game lobby"), BotCommand("join", "Join game"), BotCommand("leave", "Leave lobby"), BotCommand("startgame", "Start game"), BotCommand("endgame", "End game"), BotCommand("players", "Show players"), BotCommand("myrole", "Show your role"), BotCommand("stats", "Show statistics"), BotCommand("help", "Help and rules"), BotCommand("language", "Change language"), BotCommand("grouplanguage", "Change group language"), BotCommand("admin", "Admin commands")],
-        "ru": [BotCommand("start", "Запустить бота"), BotCommand("newgame", "Создать игру"), BotCommand("join", "Войти в игру"), BotCommand("leave", "Выйти из лобби"), BotCommand("startgame", "Начать игру"), BotCommand("endgame", "Завершить игру"), BotCommand("players", "Список игроков"), BotCommand("myrole", "Моя роль"), BotCommand("stats", "Статистика"), BotCommand("help", "Помощь и правила"), BotCommand("language", "Сменить язык"), BotCommand("grouplanguage", "Язык группы"), BotCommand("admin", "Команды админа")],
-        "uz": [BotCommand("start", "Botni ishga tushirish"), BotCommand("newgame", "Yangi o‘yin yaratish"), BotCommand("join", "O‘yinga qo‘shilish"), BotCommand("leave", "Lobbidan chiqish"), BotCommand("startgame", "O‘yinni boshlash"), BotCommand("endgame", "O‘yinni tugatish"), BotCommand("players", "O‘yinchilar ro‘yxati"), BotCommand("myrole", "Rolimni ko‘rish"), BotCommand("stats", "Statistika"), BotCommand("help", "Yordam va qoidalar"), BotCommand("language", "Tilni o‘zgartirish"), BotCommand("grouplanguage", "Guruh tilini o‘zgartirish"), BotCommand("admin", "Admin buyruqlari")],
-        "ar": [BotCommand("start", "تشغيل البوت"), BotCommand("newgame", "إنشاء لعبة"), BotCommand("join", "الانضمام للعبة"), BotCommand("leave", "مغادرة اللعبة"), BotCommand("startgame", "بدء اللعبة"), BotCommand("endgame", "إنهاء اللعبة"), BotCommand("players", "قائمة اللاعبين"), BotCommand("myrole", "دوري"), BotCommand("stats", "الإحصائيات"), BotCommand("help", "المساعدة والقواعد"), BotCommand("language", "تغيير اللغة"), BotCommand("grouplanguage", "لغة المجموعة"), BotCommand("admin", "أوامر المشرف")],
-        "de": [BotCommand("start", "Bot starten"), BotCommand("newgame", "Neue Lobby erstellen"), BotCommand("join", "Spiel beitreten"), BotCommand("leave", "Lobby verlassen"), BotCommand("startgame", "Spiel starten"), BotCommand("endgame", "Spiel beenden"), BotCommand("players", "Spielerliste"), BotCommand("myrole", "Meine Rolle"), BotCommand("stats", "Statistik"), BotCommand("help", "Hilfe und Regeln"), BotCommand("language", "Sprache ändern"), BotCommand("grouplanguage", "Gruppensprache"), BotCommand("admin", "Admin-Befehle")],
+        "en": [BotCommand("start", "Open main menu"), BotCommand("help", "Quick help and rules"), BotCommand("newgame", "Create a group game"), BotCommand("join", "Join an open game"), BotCommand("leave", "Leave the lobby"), BotCommand("language", "Choose language")],
+        "ru": [BotCommand("start", "Главное меню"), BotCommand("help", "Помощь и правила"), BotCommand("newgame", "Создать игру"), BotCommand("join", "Войти в игру"), BotCommand("leave", "Выйти из лобби"), BotCommand("language", "Выбрать язык")],
+        "uz": [BotCommand("start", "Asosiy menyu"), BotCommand("help", "Yordam va qoidalar"), BotCommand("newgame", "Yangi o‘yin"), BotCommand("join", "O‘yinga qo‘shilish"), BotCommand("leave", "Lobbidan chiqish"), BotCommand("language", "Til tanlash")],
+        "ar": [BotCommand("start", "القائمة الرئيسية"), BotCommand("help", "المساعدة والقواعد"), BotCommand("newgame", "إنشاء لعبة"), BotCommand("join", "الانضمام للعبة"), BotCommand("leave", "مغادرة الردهة"), BotCommand("language", "اختيار اللغة")],
+        "de": [BotCommand("start", "Hauptmenü öffnen"), BotCommand("help", "Hilfe und Regeln"), BotCommand("newgame", "Spiel erstellen"), BotCommand("join", "Spiel beitreten"), BotCommand("leave", "Lobby verlassen"), BotCommand("language", "Sprache wählen")],
     }
     for code, commands in command_sets.items():
         await app.bot.set_my_commands(commands, language_code=code)
@@ -2957,6 +2950,8 @@ async def post_init(app: Application) -> None:
 
 
 async def post_shutdown(app: Application) -> None:
+    from i18n import close_translation_client
+    await close_translation_client()
     await db.close()
     log.info("Bot to'xtatildi.")
 
