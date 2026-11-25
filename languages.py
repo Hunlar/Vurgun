@@ -8,6 +8,8 @@ LANGUAGES = {
     "uz": "🇺🇿 O‘zbekcha",
     "ar": "🇸🇦 العربية",
     "de": "🇩🇪 Deutsch",
+    "az": "🇦🇿 Azərbaycanca",
+    "fa": "🇮🇷 فارسی",
 }
 
 TEXTS = {
@@ -234,7 +236,7 @@ GAME_TEXTS = {
 "lobby_join":"🙋 Katıl", "lobby_leave":"🚪 Ayrıl", "lobby_ai":"🤖 Yapay oyuncu ekle", "lobby_start":"▶️ Başlat ({n} oyuncu)", "lobby_need":"⚠️ En az {minimum} gerekli ({n}/{minimum})", "lobby_extend":"⏰ +30 sn uzat",
 "wait30":"⏰ <b>Lobiye katılmak için 30 saniye kaldı!</b>\nŞu an {n} oyuncu var.\n/join yazın!", "wait10":"⚠️ <b>10 saniye kaldı!</b> Acele edin! ({n} oyuncu)", "auto_start":"⏱ Süre doldu! Oyun otomatik başlatılıyor...", "too_few":"❌ Süre doldu. Yeterli oyuncu yok ({n}/{minimum}).\nYeni oyun için /newgame",
 "game_started":"🎭 <b>Oyun #{game_id} başladı!</b>\n👥 {n} oyuncu — roller dağıtıldı!\n\nÖzel mesajlarınızı kontrol edin 📩", "night_started":"🌙 <b>{round}. gece başlıyor...</b>\nÖzel rollere sahip oyuncular DM'lerini kontrol etsin!\n⏱ {seconds} saniye",
-"dawn":"☀️ <b>Şafak söktü...</b>", "no_death":"🕊️ Bu gece kimse hayatını kaybetmedi!", "found_dead":"💀 <b>{name}</b> ölü bulundu!\n   Rolü: {emoji} <b>{role}</b>.", "day":"☀️ <b>{round}. gün — Tartışma!</b>\n\n<b>Hayatta kalanlar ({count}):</b>\n{players}\n\n🗣 {seconds} saniye tartışın!", "vote_title":"🗳 <b>Oylama başladı!</b>", "vote_prompt":"Kimin elenmesini istiyorsunuz? ⏱ {seconds} saniye", "abstain":"⏭ Çekimser", "no_votes":"🤷 Kimse oy kullanmadı. Kimse elenmedi.", "tie":"📊 <b>Oylar:</b>\n{votes}\n\n⚖️ Beraberlik: <b>{names}</b>! Kimse elenmedi.", "defense":"📊 <b>Oylar:</b>\n{votes}\n\n⚖️ <b>{name}</b> — elenmeden önce {seconds} saniye savunma yapabilir!", "executed":"🪓 <b>{name}</b> infaz edildi!\nRolü: {emoji} <b>{role}</b>.", "kamikaze":"\n\n💣 MEMATİ! <b>{name}</b> ölmeden önce <b>{victim}</b> kişisini de yanında götürdü!", "game_over":"{emoji} <b>OYUN BİTTİ!</b>\n<b>{winner}</b>\n\n<b>Açıklanan roller:</b>\n{roles}\n\n📊 {round} tur oynandı. İstatistikler için /stats yazın!", "town_win":"Halk ve istihbarat kazandı! 🏙", "mafia_win":"Konsey kazandı! 🔫", "traitor_win":"Hain kendi oyununu kazandı! 🎭", "draw":"Berabere! ⚖️", "alive":"✅ Hayatta", "dead":"💀 Öldü", "healed":"🛡️ Aslan Akbey bir oyuncuyu ölümden kurtardı!","vote_btn":"🗳 {name}",
+"dawn":"☀️ <b>Şafak söktü...</b>", "no_death":"🕊️ Bu gece kimse hayatını kaybetmedi!", "found_dead":"💀 <b>{name}</b> ölü bulundu!\n   Rolü: {emoji} <b>{role}</b>.", "day":"☀️ <b>{round}. gün — Tartışma!</b>\n\n<b>Hayatta kalanlar ({count}):</b>\n{players}\n\n🗣 {seconds} saniye tartışın!", "vote_title":"🗳 Oylama başladı!", "vote_prompt":"Kimi elemek istiyorsunuz? ⏱ {seconds} saniye", "abstain":"⏭ Çekimser", "no_votes":"🤷 Kimse oy kullanmadı. Kimse elenmedi.", "tie":"📊 <b>Oylar:</b>\n{votes}\n\n⚖️ Beraberlik: <b>{names}</b>! Kimse elenmedi.", "defense":"📊 <b>Oylar:</b>\n{votes}\n\n⚖️ <b>{name}</b> — elenmeden önce {seconds} saniye savunma yapabilir!", "executed":"🪓 <b>{name}</b> infaz edildi!\nRolü: {emoji} <b>{role}</b>.", "kamikaze":"\n\n💣 MEMATİ! <b>{name}</b> ölmeden önce <b>{victim}</b> kişisini de yanında götürdü!", "game_over":"{emoji} <b>OYUN BİTTİ!</b>\n<b>{winner}</b>\n\n<b>Açıklanan roller:</b>\n{roles}\n\n📊 {round} tur oynandı. İstatistikler için /stats yazın!", "town_win":"Halk ve istihbarat kazandı! 🏙", "mafia_win":"Konsey kazandı! 🔫", "traitor_win":"Hain kendi oyununu kazandı! 🎭", "draw":"Berabere! ⚖️", "alive":"✅ Hayatta", "dead":"💀 Öldü", "healed":"🛡️ Aslan Akbey bir oyuncuyu ölümden kurtardı!","vote_btn":"🗳 {name}",
 },
 "en": {
 "lobby_join":"🙋 Join", "lobby_leave":"🚪 Leave", "lobby_ai":"🤖 Add AI player", "lobby_start":"▶️ Start ({n} players)", "lobby_need":"⚠️ Need at least {minimum} ({n}/{minimum})", "lobby_extend":"⏰ Extend +30s",
@@ -353,7 +355,7 @@ _EXTRA_BOT_TEXTS = {'tr': {'group_language_prompt': '🌐 <b>Grup dili</b>\nBu g
                        '{players}\n'
                        '\n'
                        '🗣 {seconds} saniye tartışın!',
-        'voting_started': '🗳 <b>Oylama başladı!</b>\nKimi elemek istiyorsunuz? ⏱ {seconds} saniye',
+        'voting_started': '🗳 Oylama başladı!\nKimi elemek istiyorsunuz? ⏱ {seconds} saniye',
         'no_votes': '🤷 Kimse oy kullanmadı. Kimse elenmedi.',
         'defense_prompt': '📊 <b>Oylar:</b>\n'
                           '{votes}\n'
