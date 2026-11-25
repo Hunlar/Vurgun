@@ -2620,19 +2620,25 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             if role_lang not in ("tr", "en", "ru", "uz", "ar", "de"):
                 role_text = await google_translate(role_text, role_lang)
             await q.answer()
+            role_markup = InlineKeyboardMarkup([[InlineKeyboardButton("↩️ Ana menü", callback_data="back_main")]])
             await edit_callback_message(
                 q, role_text, parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ Ana menü", callback_data="back_main")]])
+                reply_markup=await translate_markup(role_markup, role_lang)
             )
             return
 
         elif data == "donate_menu":
             await q.answer()
+            donation_lang = await db.get_language(uid)
+            donation_text = (
+                "⭐ <b>KVP GAME'e destek ol</b>\n\n"
+                "Telegram Stars ile gönüllü katkıda bulunabilirsin. "
+                "Desteğin geliştirme ve sunucu giderlerine yardımcı olur."
+            )
+            donation_text = await google_translate(donation_text, donation_lang)
             await edit_callback_message(
-                q,
-                "⭐ <b>KVP GAME'e destek ol</b>\n\nTelegram Stars ile gönüllü katkıda bulunabilirsin. Desteğin geliştirme ve sunucu giderlerine yardımcı olur.",
-                parse_mode=ParseMode.HTML,
-                reply_markup=donation_kb()
+                q, donation_text, parse_mode=ParseMode.HTML,
+                reply_markup=await translate_markup(donation_kb(), donation_lang)
             )
             return
 
