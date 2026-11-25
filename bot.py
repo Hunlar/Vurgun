@@ -72,47 +72,7 @@ OWNER_IDS = {
 }
 
 SUPPORT_URL = os.environ.get("SUPPORT_URL", "").strip()
-GOOGLE_TRANSLATE_API_KEY = os.environ.get("GOOGLE_TRANSLATE_API_KEY", "").strip()
-_TRANSLATION_CACHE: dict[tuple[str, str], str] = {}
-
-async def google_translate(text: str, target_lang: str) -> str:
-    if not text or target_lang in ("tr", "en", "ru", "uz", "ar", "de") or not GOOGLE_TRANSLATE_API_KEY:
-        return text
-    key = (target_lang, text)
-    if key in _TRANSLATION_CACHE:
-        return _TRANSLATION_CACHE[key]
-    try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
-            response = await client.post(
-                "https://translation.googleapis.com/language/translate/v2",
-                params={"key": GOOGLE_TRANSLATE_API_KEY},
-                json={"q": text, "source": "tr", "target": target_lang, "format": "html"},
-            )
-            response.raise_for_status()
-            translated = response.json()["data"]["translations"][0]["translatedText"]
-            _TRANSLATION_CACHE[key] = translated
-            return translated
-    except Exception as exc:
-        log.warning("Google Translate error (%s): %s", target_lang, exc)
-        return text
-
-async def translate_markup(markup, target_lang: str):
-    if markup is None or target_lang in ("tr", "en", "ru", "uz", "ar", "de") or not GOOGLE_TRANSLATE_API_KEY:
-        return markup
-    rows = []
-    for row in markup.inline_keyboard:
-        out = []
-        for button in row:
-            label = await google_translate(button.text, target_lang) if button.text else button.text
-            out.append(InlineKeyboardButton(
-                text=label, url=button.url, callback_data=button.callback_data,
-                web_app=button.web_app, login_url=button.login_url,
-                switch_inline_query=button.switch_inline_query,
-                switch_inline_query_current_chat=button.switch_inline_query_current_chat,
-                callback_game=button.callback_game, pay=button.pay,
-            ))
-        rows.append(out)
-    return InlineKeyboardMarkup(rows)
+from i18n import google_translate, translate_markup, normalize_language
 
 
 
@@ -585,6 +545,12 @@ class DB:
         ) as cur:
             row = await cur.fetchone()
         return row["language"] if row and row["language"] in LANGUAGES else "tr"
+
+    async def has_language(self, user_id: int) -> bool:
+        async with self._db.execute(
+            "SELECT 1 FROM user_languages WHERE user_id=?", (user_id,)
+        ) as cur:
+            return await cur.fetchone() is not None
 
     async def set_language(self, user_id: int, language: str) -> None:
         if language not in LANGUAGES:
@@ -2071,6 +2037,9 @@ async def require_channel_membership(
 # ══════════════════════════════════════════════════════════════════
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
+    if not await db.has_language(user.id):
+        detected = normalize_language(user.language_code or "tr")
+        await db.set_language(user.id, detected if detected in LANGUAGES else "tr")
     lang = await db.get_language(user.id)
     if not await require_channel_membership(update, ctx):
         return
@@ -2233,15 +2202,30 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_precheckout(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.pre_checkout_query
-    await query.answer(ok=True)
+    parts = (query.invoice_payload or "").split("-")
+    valid = (
+        len(parts) == 4 and parts[0] == "kvpgame" and parts[1] == "donation"
+        and parts[2].isdigit() and int(parts[2]) == query.from_user.id
+        and parts[3].isdigit() and int(parts[3]) in (50, 100, 250)
+        and query.currency == "XTR" and query.total_amount == int(parts[3])
+    )
+    await query.answer(ok=valid, error_message=None if valid else "Invalid donation invoice.")
 
 
 async def cmd_successful_payment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     payment = update.effective_message.successful_payment
+    payload = (payment.invoice_payload or "").split("-")
+    if not (
+        len(payload) == 4 and payload[0] == "kvpgame" and payload[1] == "donation"
+        and payload[2].isdigit() and int(payload[2]) == update.effective_user.id
+        and payload[3].isdigit() and int(payload[3]) == payment.total_amount
+        and payment.currency == "XTR"
+    ):
+        log.warning("Invalid Stars donation payload from user %s", update.effective_user.id)
+        return
     lang = await db.get_language(update.effective_user.id)
     thanks = "⭐ Desteğin için çok teşekkür ederiz! Katkın KVP GAME'in gelişmesine yardımcı oluyor."
-    if lang not in ("tr", "en", "ru", "uz", "ar", "de"):
-        thanks = await google_translate(thanks, lang)
+    thanks = await google_translate(thanks, lang)
     await update.effective_message.reply_text(thanks)
 
 
