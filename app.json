@@ -1,7 +1,7 @@
 
 {
   "name": "KVP GAME",
-  "description": "Telegram Kurtlar Vadisi temali gizli roller oyunu",
+  "description": "Telegram roleplay and social deduction game with multilingual UI and optional Telegram Stars support",
   "repository": "https://github.com/Hunlar/Vurgun",
   "keywords": [
     "telegram",
@@ -40,7 +40,7 @@
       "required": false
     },
     "GOOGLE_TRANSLATE_API_KEY": {
-      "description": "Google Cloud Translation API anahtari (Azerbaycan Turkcesi ve Farsca icin)",
+      "description": "Google Cloud Translation API key for automatic multilingual translation",
       "required": false
     },
     "DB_PATH": {
