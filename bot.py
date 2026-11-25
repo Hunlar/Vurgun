@@ -2672,9 +2672,18 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         elif data == "back_main":
             back_lang = await db.get_language(uid)
             await q.answer()
+            compact_welcome = (
+                "🎭 <b>KVP GAME</b>\n"
+                "<i>Strateji • Gizli roller • Sosyal çıkarım</i>\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                "Güven, şüphe ve stratejinin belirlediği bir dünyaya hoş geldin. "
+                "Karakterini keşfet, takımını kur ve oyunun kaderini değiştir."
+            )
+            if back_lang not in ("tr", "en", "ru", "uz", "ar", "de"):
+                compact_welcome = await google_translate(compact_welcome, back_lang)
             await edit_callback_message(
-                q, get_text(back_lang, "welcome"),
-                parse_mode=ParseMode.HTML, reply_markup=main_kb(back_lang)
+                q, compact_welcome,
+                parse_mode=ParseMode.HTML, reply_markup=await translate_markup(main_kb(back_lang), back_lang)
             )
             return
 
